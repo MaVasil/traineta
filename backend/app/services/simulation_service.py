@@ -8,6 +8,7 @@ from app.models.station import Station
 from app.models.route import TrainRoute
 from app.models.train_position import TrainPosition
 from app.services.train_service import TrainService
+from app.services.eta_service import ETAService
 
 DATA_MODE_DISCLAIMER = "DEMO / SIMULATED DATA"
 
@@ -102,13 +103,27 @@ class SimulationService:
             train.status = 'MAJOR DELAY'
 
         db.commit()
+        db.refresh(pos)  # Ensure SQLAlchemy reloads updated values after commit
 
         # Fetch and return the updated detailed info
         details = TrainService.get_train_details(db, train.train_number)
         if details:
             details["data_mode"] = DATA_MODE_DISCLAIMER
-            # Include latitude and longitude explicitly for TrainMap if not already in details
+            # Coordinates: pull from freshly-refreshed pos record
             details["latitude"] = float(pos.latitude)
             details["longitude"] = float(pos.longitude)
-        
+
+            # Merge ETA prediction fields so ETACard has live data
+            try:
+                eta = ETAService.get_train_eta(db, train.train_number)
+                if eta:
+                    details["scheduled_eta"] = eta.get("scheduled_eta", details.get("scheduled_eta", "22:36"))
+                    details["predicted_eta"] = eta.get("predicted_eta", details.get("predicted_eta", "22:42"))
+                    details["confidence"] = eta.get("confidence", 0.91)
+                    details["prediction_type"] = eta.get("prediction_type", "BASELINE")
+                    details["baseline_eta"] = eta.get("baseline_eta")
+                    details["baseline_delay"] = eta.get("baseline_delay")
+            except Exception:
+                pass  # ETA enrichment is best-effort; don't fail the simulate_step response
+
         return details

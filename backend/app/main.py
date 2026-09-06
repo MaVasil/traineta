@@ -67,9 +67,19 @@ async def lifespan(app: FastAPI):
             logger.warning("ML Model not available — using baseline heuristic predictions")
     except Exception as e:
         logger.warning(f"ML predictor check failed: {e}")
-    
+
+    # Start the background simulation ticker (auto-advances all trains every 5s)
+    ticker_task = asyncio.create_task(simulation_ticker())
+    logger.info("Simulation ticker started — pushing live position updates every 5s via WebSocket")
+
     yield
+
     # Shutdown
+    ticker_task.cancel()
+    try:
+        await ticker_task
+    except asyncio.CancelledError:
+        pass
     logger.info("Stopping TrainETA Backend...")
 
 app = FastAPI(
@@ -177,52 +187,94 @@ def system_status():
         "data_mode": "DEMO / SIMULATED DATA"
     }
 
+# Background simulation ticker — advances all trains every 5s and broadcasts via WebSocket
+async def simulation_ticker():
+    """
+    Server-side simulation tick loop.
+    Every 5 seconds: advance ALL tracked train positions in the DB and broadcast
+    the updated telemetry to all connected WebSocket clients.
+    """
+    while True:
+        await asyncio.sleep(5)
+        if not ws_manager.active_connections:
+            continue
+        try:
+            from app.database import SessionLocal
+            from app.services.simulation_service import SimulationService
+            from app.services.train_service import TrainService
+            db = SessionLocal()
+            try:
+                trains = TrainService.get_all_trains(db)
+                updated = []
+                for t in trains:
+                    try:
+                        result = SimulationService.advance_train_simulation(db, t["train_number"])
+                        if result:
+                            updated.append(result)
+                    except Exception as te:
+                        logger.warning(f"[SimTicker] Could not advance train {t.get('train_number')}: {te}")
+                if updated:
+                    await ws_manager.broadcast({
+                        "type": "position_update",
+                        "trains": updated,
+                        "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+                    })
+                    logger.debug(f"[SimTicker] Broadcast position update for {len(updated)} trains")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"[SimTicker] Tick failed: {e}")
+
 # WebSocket endpoint for live train tracking
 @app.websocket("/ws/tracking")
 async def websocket_tracking(websocket: WebSocket):
     """
     WebSocket endpoint for real-time train position updates.
-    Sends simulated position updates every 2 seconds.
+    The server auto-pushes position updates every 5s via the simulation_ticker background task.
+    Clients can also send { "type": "request_update" } for an immediate on-demand snapshot.
     """
     await ws_manager.connect(websocket)
     try:
-        # Send initial train data
+        # Send initial train data immediately on connect
         from app.database import SessionLocal
         from app.services.train_service import TrainService
-        
+
         db = SessionLocal()
         try:
             trains = TrainService.get_all_trains(db)
             await websocket.send_json({
                 "type": "initial_data",
                 "trains": trains,
-                "timestamp": __import__("datetime").datetime.utcnow().isoformat()
+                "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
             })
         finally:
             db.close()
-        
-        # Keep connection alive and listen for messages
+
+        # Keep connection alive and handle on-demand client requests
         while True:
             try:
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
                 msg = json.loads(data)
-                
+
                 if msg.get("type") == "request_update":
+                    # On-demand snapshot (no simulation advance — just read current state)
+                    from app.database import SessionLocal
+                    from app.services.train_service import TrainService
                     db = SessionLocal()
                     try:
                         trains = TrainService.get_all_trains(db)
                         await websocket.send_json({
                             "type": "position_update",
                             "trains": trains,
-                            "timestamp": __import__("datetime").datetime.utcnow().isoformat()
+                            "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
                         })
                     finally:
                         db.close()
-                        
+
             except asyncio.TimeoutError:
-                # Send heartbeat
+                # Send a lightweight ping to keep the connection alive
                 await websocket.send_json({"type": "heartbeat"})
-                
+
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
     except Exception as e:

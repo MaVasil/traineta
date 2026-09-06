@@ -15,6 +15,6 @@ class LiveTrackingResponse(BaseModel):
     delay_minutes: int = Field(..., example=6)
     scheduled_eta: str = Field(..., example="22:36")
     predicted_eta: str = Field(..., example="22:42")
-    confidence: int = Field(..., example=91)
+    confidence: float = Field(..., example=0.91)
     data_mode: str = Field("SIMULATED", example="SIMULATED")
     last_updated: Optional[datetime] = None
