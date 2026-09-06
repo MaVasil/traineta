@@ -28,21 +28,20 @@ export function getApiConnectionStatus() {
 }
 
 /**
- * Resolves potential API endpoints in order of priority:
+ * Resolves API endpoints:
  * 1. User's configured VITE_API_URL / VITE_API_BASE_URL (if provided and not mixed content)
  * 2. Same-origin relative path '/api' (proxied by Vite to the backend in dev & preview)
- * 3. Local fallback ports 'http://localhost:8000' / 'http://localhost:8001' (if on localhost HTTP)
  */
 async function fetchFromApi(path, options = {}) {
   const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
   const configuredBase = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 
-  const candidates = [];
+  let endpoint = path;
 
   // 1. If configuredBase exists and won't violate HTTPS mixed content
   if (configuredBase) {
     if (!isHttps || configuredBase.startsWith('https:') || configuredBase.startsWith('/')) {
-      candidates.push(`${configuredBase}${path}`);
+      endpoint = `${configuredBase}${path}`;
     } else {
       console.warn(
         `[TrainETA API] Skipping insecure VITE_API_URL (${configuredBase}) on HTTPS origin (${typeof window !== 'undefined' ? window.location.origin : 'https'}) to prevent browser Mixed Content block. Using same-origin proxy.`
@@ -50,68 +49,41 @@ async function fetchFromApi(path, options = {}) {
     }
   }
 
-  // 2. Relative path (proxied by Vite / reverse proxy to FastAPI)
-  if (!candidates.includes(path)) {
-    candidates.push(path);
+  try {
+    const resp = await fetch(endpoint, {
+      ...options,
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+        ...(options.headers || {}),
+      },
+    });
+
+    if (resp.ok) {
+      const data = await resp.json();
+      apiConnectionStatus = {
+        connected: true,
+        endpoint,
+        lastChecked: new Date().toISOString(),
+        error: null,
+        dataSource: 'SUPABASE POSTGRESQL (LIVE)',
+      };
+      return { data, endpoint };
+    }
+    
+    throw new Error(`HTTP ${resp.status} (${resp.statusText}) at ${endpoint}`);
+  } catch (err) {
+    apiConnectionStatus = {
+      connected: false,
+      endpoint: null,
+      lastChecked: new Date().toISOString(),
+      error: err.message,
+      dataSource: 'FALLBACK DEMO DATA',
+    };
+    throw err;
   }
-
-  // 3. If running locally on HTTP, also allow explicit localhost:8000 and 8001 as candidates
-  if (!isHttps && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-    if (!candidates.includes(`http://localhost:8000${path}`)) {
-      candidates.push(`http://localhost:8000${path}`);
-    }
-    if (!candidates.includes(`http://localhost:8001${path}`)) {
-      candidates.push(`http://localhost:8001${path}`);
-    }
-    if (!candidates.includes(`http://127.0.0.1:8000${path}`)) {
-      candidates.push(`http://127.0.0.1:8000${path}`);
-    }
-    if (!candidates.includes(`http://127.0.0.1:8001${path}`)) {
-      candidates.push(`http://127.0.0.1:8001${path}`);
-    }
-  }
-
-  let lastErr = null;
-
-  for (const endpoint of candidates) {
-    try {
-      const resp = await fetch(endpoint, {
-        ...options,
-        cache: 'no-store',
-        headers: {
-          Accept: 'application/json',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          Pragma: 'no-cache',
-          ...(options.headers || {}),
-        },
-      });
-
-      if (resp.ok) {
-        const data = await resp.json();
-        apiConnectionStatus = {
-          connected: true,
-          endpoint,
-          lastChecked: new Date().toISOString(),
-          error: null,
-          dataSource: 'SUPABASE POSTGRESQL (LIVE)',
-        };
-        return { data, endpoint };
-      }
-      lastErr = new Error(`HTTP ${resp.status} (${resp.statusText}) at ${endpoint}`);
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-
-  apiConnectionStatus = {
-    connected: false,
-    endpoint: null,
-    lastChecked: new Date().toISOString(),
-    error: lastErr ? lastErr.message : 'Unknown network failure',
-    dataSource: 'FALLBACK DEMO DATA',
-  };
-
-  throw lastErr || new Error(`Could not fetch ${path} from any candidate endpoint`);
 }
 
 /**
