@@ -36,54 +36,59 @@ async function fetchFromApi(path, options = {}) {
   const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
   const configuredBase = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 
-  let endpoint = path;
-
-  // 1. If configuredBase exists and won't violate HTTPS mixed content
+  const endpoints = [];
   if (configuredBase) {
     if (!isHttps || configuredBase.startsWith('https:') || configuredBase.startsWith('/')) {
-      endpoint = `${configuredBase}${path}`;
+      endpoints.push(`${configuredBase}${path}`);
     } else {
       console.warn(
         `[TrainETA API] Skipping insecure VITE_API_URL (${configuredBase}) on HTTPS origin (${typeof window !== 'undefined' ? window.location.origin : 'https'}) to prevent browser Mixed Content block. Using same-origin proxy.`
       );
     }
   }
-
-  try {
-    const resp = await fetch(endpoint, {
-      ...options,
-      cache: 'no-store',
-      headers: {
-        Accept: 'application/json',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        Pragma: 'no-cache',
-        ...(options.headers || {}),
-      },
-    });
-
-    if (resp.ok) {
-      const data = await resp.json();
-      apiConnectionStatus = {
-        connected: true,
-        endpoint,
-        lastChecked: new Date().toISOString(),
-        error: null,
-        dataSource: 'SUPABASE POSTGRESQL (LIVE)',
-      };
-      return { data, endpoint };
-    }
-    
-    throw new Error(`HTTP ${resp.status} (${resp.statusText}) at ${endpoint}`);
-  } catch (err) {
-    apiConnectionStatus = {
-      connected: false,
-      endpoint: null,
-      lastChecked: new Date().toISOString(),
-      error: err.message,
-      dataSource: 'FALLBACK DEMO DATA',
-    };
-    throw err;
+  if (!endpoints.includes(path)) {
+    endpoints.push(path);
   }
+
+  let lastErr = null;
+  for (const ep of endpoints) {
+    try {
+      const resp = await fetch(ep, {
+        ...options,
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+          ...(options.headers || {}),
+        },
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        apiConnectionStatus = {
+          connected: true,
+          endpoint: ep,
+          lastChecked: new Date().toISOString(),
+          error: null,
+          dataSource: 'SUPABASE POSTGRESQL (LIVE)',
+        };
+        return { data, endpoint: ep };
+      }
+      lastErr = new Error(`HTTP ${resp.status} (${resp.statusText}) at ${ep}`);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  apiConnectionStatus = {
+    connected: false,
+    endpoint: null,
+    lastChecked: new Date().toISOString(),
+    error: lastErr ? lastErr.message : 'Unknown network failure',
+    dataSource: 'FALLBACK DEMO DATA',
+  };
+  throw lastErr;
 }
 
 /**
@@ -144,6 +149,13 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
     }
   }
 
+  const rawLat = t.latitude ?? t.currentCoords?.lat;
+  const rawLng = t.longitude ?? t.currentCoords?.lng;
+  const numLat = rawLat != null ? Number(rawLat) : NaN;
+  const numLng = rawLng != null ? Number(rawLng) : NaN;
+  const hasValidCoords = !isNaN(numLat) && !isNaN(numLng);
+  const coords = hasValidCoords ? { lat: numLat, lng: numLng } : { lat: 17.9689, lng: 79.5941 };
+
   return {
     ...t,
     id: trainNumber, // used for React Router links: /train/:id and /tracking/:id
@@ -171,7 +183,9 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
     nextStationCode: nextStationCode,
     scheduledArrivalAtNext: scheduledArrival,
     predictedArrivalAtNext: predictedArrival,
-    currentCoords: t.currentCoords || (t.latitude && t.longitude ? { lat: Number(t.latitude), lng: Number(t.longitude) } : { lat: 17.9689, lng: 79.5941 }),
+    currentCoords: coords,
+    latitude: coords.lat,
+    longitude: coords.lng,
     predictionConfidence: t.predictionConfidence ?? (t.confidence ? Math.round(t.confidence * 100) : 88),
     predictionType: t.prediction_type || t.predictionType || 'BASELINE',
     baselineEta: t.baseline_eta || t.baselineEta || null,
@@ -378,16 +392,42 @@ export const trainApi = {
   },
 
   /**
+   * Fetch the latest live GPS coordinate & telemetry for a train from FastAPI (/api/trains/:id/position)
+   */
+  async getTrainPosition(trainId) {
+    try {
+      const { data } = await fetchFromApi(`/api/trains/${encodeURIComponent(trainId)}/position`);
+      if (data && data.latitude != null && data.longitude != null) {
+        return {
+          latitude: Number(data.latitude),
+          longitude: Number(data.longitude),
+          speed: Number(data.speed || 0),
+          delayMinutes: Number(data.delay_minutes ?? data.delay ?? 0),
+          currentStation: data.current_station,
+          nextStation: data.next_station,
+          timestamp: data.timestamp,
+        };
+      }
+    } catch (err) {
+      console.warn(`[TrainETA API] getTrainPosition failed for #${trainId}: ${err.message}`);
+    }
+    return null;
+  },
+
+  /**
    * Simulate train movement step along the corridor waypoints
-   * Now integrates with FastAPI backend to update positions in DB
+   * Advances position in database and returns updated telemetry and coordinates
    */
   async simulateStep(trainId) {
     try {
       const { data } = await fetchFromApi(`/api/trains/${encodeURIComponent(trainId)}/simulate_step`);
       if (data) {
-        // We still need to fetch ETA info because get_train_details might not have the full ML ETA format,
-        // Actually getTrainById combines both. Let's just use getTrainById to return the full rich object.
-        return this.getTrainById(trainId);
+        const mapped = mapBackendTrainToFrontend(data, true);
+        const idx = liveTrains.findIndex((t) => String(t.id) === String(trainId) || String(t.number) === String(trainId));
+        if (idx !== -1) {
+          liveTrains[idx] = mapped;
+        }
+        return mapped;
       }
     } catch (err) {
       console.warn(`[TrainETA API] Backend simulate_step failed for #${trainId}: ${err.message}. Using fallback.`);

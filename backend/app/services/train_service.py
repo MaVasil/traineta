@@ -46,6 +46,8 @@ class TrainService:
             next_station = pos.next_station.station_name if (pos and pos.next_station) else "Vijayawada"
             next_code = pos.next_station.station_code if (pos and pos.next_station) else "BZA"
             speed = pos.speed if (pos and pos.speed is not None) else (78 if delay > 0 else 85)
+            lat = float(pos.latitude) if (pos and pos.latitude is not None) else (float(t.source_station.latitude) if (t.source_station and t.source_station.latitude is not None) else 17.9689)
+            lng = float(pos.longitude) if (pos and pos.longitude is not None) else (float(t.source_station.longitude) if (t.source_station and t.source_station.longitude is not None) else 79.5941)
 
             result.append({
                 "id": t.id,
@@ -63,6 +65,8 @@ class TrainService:
                 "next_station": next_station,
                 "next_station_code": next_code,
                 "speed": speed,
+                "latitude": lat,
+                "longitude": lng,
             })
         return result
 
@@ -120,6 +124,8 @@ class TrainService:
             next_station = pos.next_station.station_name if (pos and pos.next_station) else "Vijayawada"
             next_code = pos.next_station.station_code if (pos and pos.next_station) else "BZA"
             speed = pos.speed if (pos and pos.speed is not None) else (78 if delay > 0 else 85)
+            lat = float(pos.latitude) if (pos and pos.latitude is not None) else (float(t.source_station.latitude) if (t.source_station and t.source_station.latitude is not None) else 17.9689)
+            lng = float(pos.longitude) if (pos and pos.longitude is not None) else (float(t.source_station.longitude) if (t.source_station and t.source_station.longitude is not None) else 79.5941)
 
             result.append({
                 "id": t.id,
@@ -137,6 +143,8 @@ class TrainService:
                 "next_station": next_station,
                 "next_station_code": next_code,
                 "speed": speed,
+                "latitude": lat,
+                "longitude": lng,
             })
         return result
 
@@ -364,6 +372,7 @@ class TrainService:
         timeline = tl_data["timeline"] if tl_data else []
 
         return {
+            "id": train.train_number,       # explicit id for frontend mapper
             "train_number": train.train_number,
             "train_name": train.train_name,
             "source": train.source_station.city if train.source_station else "Hyderabad",
@@ -374,8 +383,11 @@ class TrainService:
             "next_station_code": next_st_code,
             "current_speed": speed,
             "current_delay": delay,
+            "delay_minutes": delay,
             "scheduled_eta": sch_eta,
             "predicted_eta": prd_eta,
             "prediction_confidence": conf,
             "timeline": timeline,
+            "latitude": float(pos.latitude) if (pos and pos.latitude is not None) else 17.9689,
+            "longitude": float(pos.longitude) if (pos and pos.longitude is not None) else 79.5941,
         }

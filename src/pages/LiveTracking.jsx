@@ -14,7 +14,7 @@ import {
   Zap,
   Navigation,
 } from 'lucide-react';
-import { trainApi } from '../services/api';
+import { trainApi, mapBackendTrainToFrontend } from '../services/api';
 import { TrainMap } from '../components/TrainMap';
 import { ETACard } from '../components/ETACard';
 import { StationTimeline } from '../components/StationTimeline';
@@ -52,25 +52,122 @@ export function LiveTracking({ isDark = false }) {
     loadData();
   }, [id]);
 
+  // ── WebSocket: receive server-pushed position updates from simulation_ticker ──
   useEffect(() => {
-    if (!isSimulating || !activeTrain) {
+    // Build WS URL relative to current location (works for both dev proxy and production)
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsBase = import.meta.env.VITE_API_BASE_URL
+      ? import.meta.env.VITE_API_BASE_URL.replace(/^https?:/, wsProtocol)
+      : `${wsProtocol}//${window.location.host}`;
+    const wsUrl = `${wsBase}/ws/tracking`;
+
+    let ws = null;
+    let reconnectTimer = null;
+    let isMounted = true;
+
+    function connect() {
+      if (!isMounted) return;
+      try {
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          console.log('[TrainETA WS] Connected to', wsUrl);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if ((msg.type === 'position_update' || msg.type === 'initial_data') && Array.isArray(msg.trains)) {
+              const mapped = msg.trains.map((t) => mapBackendTrainToFrontend(t, true));
+              setTrains(mapped);
+              setActiveTrain((prev) => {
+                if (!prev) return mapped[0] || null;
+                const freshTrain = mapped.find(
+                  (t) => String(t.id) === String(prev.id) || String(t.number) === String(prev.id)
+                );
+                return freshTrain || prev;
+              });
+            }
+          } catch (e) {
+            // ignore malformed WS messages
+          }
+        };
+
+        ws.onclose = () => {
+          if (isMounted) {
+            console.warn('[TrainETA WS] Disconnected — reconnecting in 5s');
+            reconnectTimer = setTimeout(connect, 5000);
+          }
+        };
+
+        ws.onerror = () => {
+          console.warn('[TrainETA WS] Connection error — will fall back to HTTP polling');
+          ws?.close();
+        };
+      } catch (e) {
+        console.warn('[TrainETA WS] Could not open WebSocket:', e.message);
+      }
+    }
+
+    connect();
+
+    return () => {
+      isMounted = false;
+      clearTimeout(reconnectTimer);
+      ws?.close();
+    };
+  }, []);
+
+  // ── HTTP Polling: simulate_step (runs even when WS is active for extra reliability) ──
+  useEffect(() => {
+    if (!activeTrain?.id) {
       if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
       return;
     }
-    const intervalMs = Math.max(800, Math.round(3000 / simSpeed));
-    simulationIntervalRef.current = setInterval(async () => {
-      const idToUpdate = activeTrain?.id;
-      if (!idToUpdate) return;
-      try {
-        const updated = await trainApi.simulateStep(idToUpdate);
-        if (updated) {
-          setActiveTrain(updated);
+
+    if (isSimulating) {
+      const intervalMs = Math.max(800, Math.round(3000 / simSpeed));
+      simulationIntervalRef.current = setInterval(async () => {
+        const idToUpdate = activeTrain?.id;
+        if (!idToUpdate) return;
+        try {
+          const updated = await trainApi.simulateStep(idToUpdate);
+          if (updated) {
+            setActiveTrain(updated);
+          }
+        } catch (err) {
+          console.error("Simulation polling failed:", err);
         }
-      } catch (err) {
-        console.error("Simulation polling failed:", err);
-      }
-    }, intervalMs);
-    return () => { if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current); };
+      }, intervalMs);
+    } else {
+      // Live polling (every 4 seconds) to keep train position synchronized with database when simulation is paused
+      simulationIntervalRef.current = setInterval(async () => {
+        const idToUpdate = activeTrain?.id;
+        if (!idToUpdate) return;
+        try {
+          const pos = await trainApi.getTrainPosition(idToUpdate);
+          if (pos && !isNaN(pos.latitude) && !isNaN(pos.longitude)) {
+            setActiveTrain((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                currentCoords: { lat: pos.latitude, lng: pos.longitude },
+                currentSpeed: pos.speed ?? prev.currentSpeed,
+                currentDelayMin: pos.delayMinutes ?? prev.currentDelayMin,
+                currentStation: pos.currentStation || prev.currentStation,
+                nextStation: pos.nextStation || prev.nextStation,
+              };
+            });
+          }
+        } catch (err) {
+          console.error("Live telemetry polling failed:", err);
+        }
+      }, 4000);
+    }
+
+    return () => {
+      if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
+    };
   }, [isSimulating, simSpeed, activeTrain?.id]);
 
   const handleSelectTrain = (newTrainId) => navigate(`/tracking/${newTrainId}`);

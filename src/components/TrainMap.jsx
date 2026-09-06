@@ -139,10 +139,14 @@ export function TrainMap({
   // Update train marker position when train coordinates change
   useEffect(() => {
     if (trainMarkerRef.current && train?.currentCoords && window.google?.maps) {
-      const newPos = new window.google.maps.LatLng(train.currentCoords.lat, train.currentCoords.lng);
-      trainMarkerRef.current.setPosition(newPos);
+      const lat = Number(train.currentCoords.lat);
+      const lng = Number(train.currentCoords.lng);
+      if (!isNaN(lat) && !isNaN(lng)) {
+        const newPos = new window.google.maps.LatLng(lat, lng);
+        trainMarkerRef.current.setPosition(newPos);
+      }
     }
-  }, [train?.currentCoords]);
+  }, [train?.currentCoords?.lat, train?.currentCoords?.lng]);
 
   // Fallback map pan & zoom handlers
   const handleMouseDown = (e) => {
@@ -174,7 +178,14 @@ export function TrainMap({
     return { x, y };
   };
 
-  const trainPos = train?.currentCoords
+  const isValidCoord = (c) =>
+    c &&
+    typeof c.lat === 'number' &&
+    typeof c.lng === 'number' &&
+    !isNaN(c.lat) &&
+    !isNaN(c.lng);
+
+  const trainPos = isValidCoord(train?.currentCoords)
     ? projectCoord(train.currentCoords.lat, train.currentCoords.lng)
     : projectCoord(17.9689, 79.5941);
 
@@ -389,6 +400,7 @@ export function TrainMap({
               transform={`translate(${trainPos.x}, ${trainPos.y})`}
               filter="url(#trainGlow)"
               className="cursor-pointer"
+              style={{ transition: 'transform 0.7s cubic-bezier(0.4, 0, 0.2, 1)' }}
             >
               {/* Pulse rings */}
               <circle r="18" fill="#2563EB" opacity="0.3" className="animate-ping" />
