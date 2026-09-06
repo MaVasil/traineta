@@ -1,7 +1,7 @@
 import sys
-from backend.app.database import SessionLocal
-from backend.app.ml.feature_engineering import get_historical_features
-from backend.app.ml.model import MLTrainer
+from app.database import SessionLocal
+from app.ml.feature_engineering import get_historical_features
+from app.ml.model import MLTrainer
 
 def main():
     print("TrainETA ML Training\n")

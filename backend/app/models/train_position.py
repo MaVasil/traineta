@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Integer, Numeric, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
-from backend.app.db.database import Base
+from app.db.database import Base
 
 class TrainPosition(Base):
     __tablename__ = "train_positions"

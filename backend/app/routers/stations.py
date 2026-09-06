@@ -3,8 +3,8 @@ from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from backend.app.database import get_db
-from backend.app.models.station import Station
+from app.database import get_db
+from app.models.station import Station
 
 def is_valid_uuid(val: str) -> bool:
     try:

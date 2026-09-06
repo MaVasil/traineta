@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from backend.app.database import get_db
-from backend.app.schemas.route import TrainRouteResponse
-from backend.app.services.train_service import TrainService
+from app.database import get_db
+from app.schemas.route import TrainRouteResponse
+from app.services.train_service import TrainService
 
 router = APIRouter(prefix="/api/routes", tags=["Routes"])
 

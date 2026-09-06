@@ -3,11 +3,11 @@ import random
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
-from backend.app.models.train import Train
-from backend.app.models.station import Station
-from backend.app.models.route import TrainRoute
-from backend.app.models.train_position import TrainPosition
-from backend.app.services.train_service import TrainService
+from app.models.train import Train
+from app.models.station import Station
+from app.models.route import TrainRoute
+from app.models.train_position import TrainPosition
+from app.services.train_service import TrainService
 
 DATA_MODE_DISCLAIMER = "DEMO / SIMULATED DATA"
 

@@ -1,10 +1,10 @@
-from backend.app.schemas.station import StationBase, StationResponse
-from backend.app.schemas.train import TrainItemResponse, TrainDetailsResponse
-from backend.app.schemas.route import RouteStationItem, TrainRouteResponse
-from backend.app.schemas.tracking import LiveTrackingResponse
-from backend.app.schemas.prediction import ETAPredictionResponse
-from backend.app.schemas.history import HistoryRecordItem, HistoryListResponse
-from backend.app.schemas.admin import AdminSummaryResponse, AdminAnalyticsResponse
+from app.schemas.station import StationBase, StationResponse
+from app.schemas.train import TrainItemResponse, TrainDetailsResponse
+from app.schemas.route import RouteStationItem, TrainRouteResponse
+from app.schemas.tracking import LiveTrackingResponse
+from app.schemas.prediction import ETAPredictionResponse
+from app.schemas.history import HistoryRecordItem, HistoryListResponse
+from app.schemas.admin import AdminSummaryResponse, AdminAnalyticsResponse
 
 __all__ = [
     "StationBase",

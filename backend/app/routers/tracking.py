@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from backend.app.database import get_db
-from backend.app.schemas.tracking import LiveTrackingResponse
-from backend.app.services.tracking_service import TrackingService
+from app.database import get_db
+from app.schemas.tracking import LiveTrackingResponse
+from app.services.tracking_service import TrackingService
 
 router = APIRouter(prefix="/api/tracking", tags=["Tracking"])
 

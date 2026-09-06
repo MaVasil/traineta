@@ -1,11 +1,11 @@
 from typing import List, Optional, Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from backend.app.database import get_db
-from backend.app.services.train_service import TrainService
-from backend.app.services.tracking_service import TrackingService
-from backend.app.services.eta_service import ETAService
-from backend.app.services.simulation_service import SimulationService
+from app.database import get_db
+from app.services.train_service import TrainService
+from app.services.tracking_service import TrackingService
+from app.services.eta_service import ETAService
+from app.services.simulation_service import SimulationService
 
 router = APIRouter(prefix="/api/trains", tags=["Trains"])
 

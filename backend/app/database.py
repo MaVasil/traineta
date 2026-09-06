@@ -1,5 +1,5 @@
-"""Compatibility layer re-exporting from backend.app.db.database."""
-from backend.app.db.database import (
+"""Compatibility layer re-exporting from app.db.database."""
+from app.db.database import (
     Base,
     engine,
     SessionLocal,

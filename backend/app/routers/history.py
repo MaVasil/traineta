@@ -3,10 +3,10 @@ from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
-from backend.app.database import get_db
-from backend.app.models.history import HistoricalRun
-from backend.app.models.train import Train
-from backend.app.models.station import Station
+from app.database import get_db
+from app.models.history import HistoricalRun
+from app.models.train import Train
+from app.models.station import Station
 
 def is_valid_uuid(val: str) -> bool:
     try:

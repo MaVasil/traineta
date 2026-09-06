@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from backend.app.schemas.route import RouteStationItem
+from app.schemas.route import RouteStationItem
 
 class TrainItemResponse(BaseModel):
     train_number: str = Field(..., example="12401")

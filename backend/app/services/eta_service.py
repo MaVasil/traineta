@@ -1,6 +1,6 @@
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
-from backend.app.services.prediction_service import PredictionService
+from app.services.prediction_service import PredictionService
 
 class ETAService:
     @staticmethod

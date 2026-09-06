@@ -3,12 +3,12 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_, desc
-from backend.app.models.train import Train
-from backend.app.models.station import Station
-from backend.app.models.route import TrainRoute
-from backend.app.models.train_position import TrainPosition
-from backend.app.models.prediction import ETAPrediction
-from backend.app.models.history import HistoricalRun
+from app.models.train import Train
+from app.models.station import Station
+from app.models.route import TrainRoute
+from app.models.train_position import TrainPosition
+from app.models.prediction import ETAPrediction
+from app.models.history import HistoricalRun
 
 def is_valid_uuid(val: str) -> bool:
     try:

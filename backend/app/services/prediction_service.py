@@ -1,11 +1,11 @@
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
-from backend.app.models.train import Train
-from backend.app.models.train_position import TrainPosition
-from backend.app.models.route import TrainRoute
-from backend.app.models.prediction import ETAPrediction
-from backend.app.ml.predictor import ml_predictor
+from app.models.train import Train
+from app.models.train_position import TrainPosition
+from app.models.route import TrainRoute
+from app.models.prediction import ETAPrediction
+from app.ml.predictor import ml_predictor
 
 class BaselineETAPredictor:
     """
@@ -60,7 +60,7 @@ class PredictionService:
     @classmethod
     def get_baseline_prediction(cls, db: Session, train_id: str) -> Optional[Dict[str, Any]]:
         """Resolves train from database and generates ETA prediction, using ML if available."""
-        from backend.app.services.train_service import TrainService
+        from app.services.train_service import TrainService
         train = TrainService.find_train(db, train_id)
         if not train:
             return None

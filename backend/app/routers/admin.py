@@ -2,13 +2,13 @@ from typing import Dict, Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from backend.app.database import get_db
-from backend.app.models.train import Train
-from backend.app.models.station import Station
-from backend.app.models.train_position import TrainPosition
-from backend.app.models.history import HistoricalRun
-from backend.app.models.prediction import ETAPrediction
-from backend.app.models.delay_event import DelayEvent
+from app.database import get_db
+from app.models.train import Train
+from app.models.station import Station
+from app.models.train_position import TrainPosition
+from app.models.history import HistoricalRun
+from app.models.prediction import ETAPrediction
+from app.models.delay_event import DelayEvent
 
 router = APIRouter(tags=["Analytics & Operations"])
 

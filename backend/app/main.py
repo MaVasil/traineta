@@ -4,9 +4,9 @@ import json
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from backend.app.config import settings
-from backend.app.database import init_db, check_db_connection
-from backend.app.routers import (
+from app.config import settings
+from app.database import init_db, check_db_connection
+from app.routers import (
     trains_router,
     stations_router,
     routes_router,
@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
     
     # Check if ML model is available
     try:
-        from backend.app.ml.predictor import ml_predictor
+        from app.ml.predictor import ml_predictor
         if ml_predictor.is_available():
             logger.info("ML Model loaded: %s (MAE: %s min)", 
                        ml_predictor.metadata.get("model_name", "Unknown"),
@@ -158,7 +158,7 @@ def system_status():
     ml_status = "unavailable"
     ml_model = None
     try:
-        from backend.app.ml.predictor import ml_predictor
+        from app.ml.predictor import ml_predictor
         if ml_predictor.is_available():
             ml_status = "loaded"
             ml_model = ml_predictor.metadata.get("model_name", "Unknown")
@@ -187,8 +187,8 @@ async def websocket_tracking(websocket: WebSocket):
     await ws_manager.connect(websocket)
     try:
         # Send initial train data
-        from backend.app.database import SessionLocal
-        from backend.app.services.train_service import TrainService
+        from app.database import SessionLocal
+        from app.services.train_service import TrainService
         
         db = SessionLocal()
         try:
@@ -240,4 +240,4 @@ app.include_router(admin_router)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.app.main:app", host=settings.HOST, port=settings.PORT, reload=True)
+    uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=True)

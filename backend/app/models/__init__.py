@@ -1,10 +1,10 @@
-from backend.app.models.station import Station
-from backend.app.models.train import Train
-from backend.app.models.route import TrainRoute, Route
-from backend.app.models.train_position import TrainPosition
-from backend.app.models.prediction import ETAPrediction
-from backend.app.models.history import HistoricalRun, JourneyHistory
-from backend.app.models.delay_event import DelayEvent
+from app.models.station import Station
+from app.models.train import Train
+from app.models.route import TrainRoute, Route
+from app.models.train_position import TrainPosition
+from app.models.prediction import ETAPrediction
+from app.models.history import HistoricalRun, JourneyHistory
+from app.models.delay_event import DelayEvent
 
 __all__ = [
     "Station",

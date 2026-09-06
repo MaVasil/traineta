@@ -2,11 +2,11 @@ import pandas as pd
 import random
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
-from backend.app.models.history import HistoricalRun
-from backend.app.models.delay_event import DelayEvent
-from backend.app.models.route import TrainRoute
-from backend.app.models.train import Train
-from backend.app.models.station import Station
+from app.models.history import HistoricalRun
+from app.models.delay_event import DelayEvent
+from app.models.route import TrainRoute
+from app.models.train import Train
+from app.models.station import Station
 
 def get_historical_features(db: Session) -> pd.DataFrame:
     """

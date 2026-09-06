@@ -1,7 +1,7 @@
 import os
 import json
 import joblib
-from backend.app.ml.feature_engineering import create_features
+from app.ml.feature_engineering import create_features
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 MODEL_PATH = os.path.join(MODEL_DIR, "eta_model.joblib")

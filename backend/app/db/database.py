@@ -3,7 +3,7 @@ from datetime import datetime, date, time, timedelta
 from typing import Generator
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
-from backend.app.config import settings
+from app.config import settings
 
 # Engine configuration
 connect_args = {}
@@ -41,13 +41,13 @@ def check_db_connection() -> dict:
 
 def init_db():
     """Validates schema tables and ensures baseline corridor seed data exists."""
-    from backend.app.models.station import Station
-    from backend.app.models.train import Train
-    from backend.app.models.route import TrainRoute
-    from backend.app.models.train_position import TrainPosition
-    from backend.app.models.prediction import ETAPrediction
-    from backend.app.models.history import HistoricalRun
-    from backend.app.models.delay_event import DelayEvent
+    from app.models.station import Station
+    from app.models.train import Train
+    from app.models.route import TrainRoute
+    from app.models.train_position import TrainPosition
+    from app.models.prediction import ETAPrediction
+    from app.models.history import HistoricalRun
+    from app.models.delay_event import DelayEvent
 
     try:
         Base.metadata.create_all(bind=engine)
@@ -65,13 +65,13 @@ def init_db():
 
 def seed_demo_data(db):
     """Populates complete South Central Railway corridor demo records including routes, positions, predictions, and history."""
-    from backend.app.models.station import Station
-    from backend.app.models.train import Train
-    from backend.app.models.route import TrainRoute
-    from backend.app.models.train_position import TrainPosition
-    from backend.app.models.prediction import ETAPrediction
-    from backend.app.models.history import HistoricalRun
-    from backend.app.models.delay_event import DelayEvent
+    from app.models.station import Station
+    from app.models.train import Train
+    from app.models.route import TrainRoute
+    from app.models.train_position import TrainPosition
+    from app.models.prediction import ETAPrediction
+    from app.models.history import HistoricalRun
+    from app.models.delay_event import DelayEvent
 
     # ─── 1. STATIONS ───
     stations_data = [

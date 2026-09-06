@@ -1,11 +1,11 @@
 import random
 from datetime import datetime, timedelta, date
 from sqlalchemy.orm import Session
-from backend.app.models.station import Station
-from backend.app.models.train import Train
-from backend.app.models.route import TrainRoute
-from backend.app.models.history import HistoricalRun
-from backend.app.models.delay_event import DelayEvent
+from app.models.station import Station
+from app.models.train import Train
+from app.models.route import TrainRoute
+from app.models.history import HistoricalRun
+from app.models.delay_event import DelayEvent
 
 def generate_synthetic_historical_data(db: Session, num_records=5000):
     """
@@ -109,7 +109,7 @@ def generate_synthetic_historical_data(db: Session, num_records=5000):
     print("Synthetic data generation complete.")
 
 if __name__ == '__main__':
-    from backend.app.database import SessionLocal
+    from app.database import SessionLocal
     db = SessionLocal()
     generate_synthetic_historical_data(db)
     db.close()

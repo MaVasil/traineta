@@ -1,9 +1,9 @@
 from datetime import datetime
 from typing import Optional
 from sqlalchemy.orm import Session
-from backend.app.models.train import Train
-from backend.app.models.train_position import TrainPosition
-from backend.app.models.prediction import ETAPrediction
+from app.models.train import Train
+from app.models.train_position import TrainPosition
+from app.models.prediction import ETAPrediction
 
 class TrackingService:
     @staticmethod
