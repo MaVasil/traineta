@@ -1,0 +1,19 @@
+{
+  "model_name": "RandomForestRegressor",
+  "model_version": "1.0",
+  "training_timestamp": "2026-09-06T04:29:58.741065",
+  "training_rows": 5000,
+  "features": [
+    "scheduled_hour",
+    "day_of_week",
+    "is_rush_hour",
+    "base_travel_time",
+    "current_delay",
+    "current_speed",
+    "distance_km",
+    "avg_station_delay"
+  ],
+  "MAE": 1.98,
+  "RMSE": 2.89,
+  "R2": 1.0
+}

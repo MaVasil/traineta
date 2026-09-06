@@ -1,0 +1,6 @@
+{
+  "name": "TrainETA",
+  "description": "Dynamic Railway Intelligence — Professional railway platform with real-time ETA prediction, interactive route tracking, operations analytics, and station timelines.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
