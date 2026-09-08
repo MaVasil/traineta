@@ -3,31 +3,38 @@ import React from 'react';
 import { Radio, Gauge, Clock, MapPin, Play, Pause, RotateCcw } from 'lucide-react';
 
 export function LiveStatus({
-  currentSpeed = 78,
-  currentDelayMin = 6,
+  currentSpeed = null,
+  currentDelayMin = 0,
   nextStation = 'Vijayawada',
+  dataStatus = 'LIVE',
+  dataSource = 'SIMULATED',
   isSimulating = true,
   onToggleSimulate,
   onStepSimulate,
   onResetSimulate,
 }) {
   const isDelayed = currentDelayMin > 0;
+  const isAhead = currentDelayMin < 0;
 
   return (
     <div className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] shadow-xs">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         {/* Live status badge */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/80 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 font-bold text-xs">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border font-bold text-xs ${
+            dataStatus === 'LIVE' ? 'bg-emerald-50 dark:bg-emerald-950/80 border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400' :
+            dataStatus === 'STALE' ? 'bg-amber-50 dark:bg-amber-950/80 border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400' :
+            'bg-slate-50 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'
+          }`}>
             <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-600" />
+              {dataStatus === 'LIVE' && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />}
+              <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${dataStatus === 'LIVE' ? 'bg-emerald-600' : (dataStatus === 'STALE' ? 'bg-amber-500' : 'bg-slate-500')}`} />
             </span>
-            <span className="tracking-wider">LIVE TELEMETRY</span>
+            <span className="tracking-wider">{dataStatus} TELEMETRY</span>
           </div>
 
-          <span className="text-xs font-mono text-slate-500 dark:text-slate-400 hidden md:inline">
-            GPS Satellite Locked (10 Hz)
+          <span className="text-xs font-mono text-slate-500 dark:text-slate-400 hidden sm:inline px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+            Source: {dataSource}
           </span>
         </div>
 
@@ -40,7 +47,7 @@ export function LiveStatus({
                 Current Speed
               </span>
               <span className="font-mono text-sm font-bold text-slate-900 dark:text-white">
-                {currentSpeed} km/h
+                {currentSpeed != null ? `${currentSpeed} km/h` : 'N/A'}
               </span>
             </div>
           </div>
@@ -53,10 +60,10 @@ export function LiveStatus({
               </span>
               <span
                 className={`font-mono text-sm font-bold ${
-                  isDelayed ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'
+                  isAhead ? 'text-emerald-600 dark:text-emerald-400' : (isDelayed ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400')
                 }`}
               >
-                {isDelayed ? `+${currentDelayMin} min` : 'On Time'}
+                {isAhead ? `${Math.abs(currentDelayMin)} min early` : (isDelayed ? `+${currentDelayMin} min` : 'On Time')}
               </span>
             </div>
           </div>

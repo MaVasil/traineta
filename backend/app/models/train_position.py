@@ -9,13 +9,17 @@ class TrainPosition(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     train_id = Column(String(36), ForeignKey("trains.id", ondelete="CASCADE"), nullable=False, index=True)
-    latitude = Column(Numeric(9, 6), nullable=False)
-    longitude = Column(Numeric(9, 6), nullable=False)
-    speed = Column(Integer, default=0)
+    latitude = Column(Numeric(9, 6), nullable=True)
+    longitude = Column(Numeric(9, 6), nullable=True)
+    speed = Column(Integer, nullable=True)
     current_station_id = Column(String(36), ForeignKey("stations.id", ondelete="SET NULL"), nullable=True)
     next_station_id = Column(String(36), ForeignKey("stations.id", ondelete="SET NULL"), nullable=True)
     current_delay_minutes = Column(Integer, default=0)
     recorded_at = Column(DateTime, default=datetime.utcnow, index=True)
+    
+    # Provider data
+    data_source = Column(String(50), default="SIMULATED")
+    data_status = Column(String(50), default="LIVE")
 
     # Relationships
     train = relationship("Train", back_populates="positions")
