@@ -75,11 +75,13 @@ class TrainDiscoveryService:
             if train_id:
                 cur_st_id = RealtimePipeline.resolve_station(
                     db,
-                    live_data.get("current_station_code") or live_data.get("current_station")
+                    live_data.get("current_station_code") or live_data.get("current_station"),
+                    live_data=live_data
                 )
                 nxt_st_id = RealtimePipeline.resolve_station(
                     db,
-                    live_data.get("next_station_code") or live_data.get("next_station")
+                    live_data.get("next_station_code") or live_data.get("next_station"),
+                    live_data=live_data
                 )
                 RealtimePipeline.persist_snapshot(db, train_id, live_data, cur_st_id, nxt_st_id)
                 RealtimePipeline.register_dynamic_train(clean_num)
@@ -89,7 +91,8 @@ class TrainDiscoveryService:
             logger.info(
                 f"[Timeline] Discovered train {clean_num}: total halts={len(timeline_list)}, "
                 f"current_station={live_data.get('current_station_code')}, "
-                f"next_station={live_data.get('next_station_code')}"
+                f"next_station={live_data.get('next_station_code')}, "
+                f"lat={live_data.get('latitude')}, lng={live_data.get('longitude')}"
             )
 
             live_train_dict = {
@@ -99,17 +102,30 @@ class TrainDiscoveryService:
                 "train_name": live_data.get("train_name") or f"Express {clean_num}",
                 "source": live_data.get("source") or "Origin",
                 "source_code": live_data.get("source_code") or "SRC",
+                "source_latitude": live_data.get("source_latitude"),
+                "source_longitude": live_data.get("source_longitude"),
+                "source_details": live_data.get("source_details"),
                 "destination": live_data.get("destination") or "Destination",
                 "destination_code": live_data.get("destination_code") or "DST",
+                "destination_latitude": live_data.get("destination_latitude"),
+                "destination_longitude": live_data.get("destination_longitude"),
+                "destination_details": live_data.get("destination_details"),
                 "status": live_data.get("status") or "ON_TIME",
                 "delay_minutes": live_data.get("current_delay_minutes", 0),
                 "current_station": live_data.get("current_station"),
                 "current_station_code": live_data.get("current_station_code"),
                 "next_station": live_data.get("next_station"),
                 "next_station_code": live_data.get("next_station_code"),
-                "speed": live_data.get("speed_kmph"),
+                "speed": live_data.get("speed") if live_data.get("speed") is not None else live_data.get("speed_kmph"),
+                "speed_kmph": live_data.get("speed_kmph") if live_data.get("speed_kmph") is not None else live_data.get("speed"),
+                "speed_status": live_data.get("speed_status") or live_data.get("speedStatus") or ("LIVE" if (live_data.get("speed") is not None or live_data.get("speed_kmph") is not None) else "UNAVAILABLE"),
+                "speedStatus": live_data.get("speed_status") or live_data.get("speedStatus") or ("LIVE" if (live_data.get("speed") is not None or live_data.get("speed_kmph") is not None) else "UNAVAILABLE"),
+                "speed_unit": live_data.get("speed_unit", "km/h"),
                 "latitude": live_data.get("latitude"),
                 "longitude": live_data.get("longitude"),
+                "location_type": live_data.get("location_type"),
+                "station_latitude": live_data.get("station_latitude"),
+                "station_longitude": live_data.get("station_longitude"),
                 "timestamp": live_data.get("timestamp"),
                 "source_type": "RAILRADAR",
                 "data_source": "railradar",
@@ -117,10 +133,12 @@ class TrainDiscoveryService:
                 "is_live": live_data.get("is_live", True),
                 "tracking_enabled": True,
                 "timeline": timeline_list,
-                "halts": timeline_list
+                "halts": timeline_list,
+                "stations": live_data.get("stations", timeline_list),
+                "route_coordinates": live_data.get("route_coordinates", [])
             }
 
-            return {
+            payload = {
                 "success": True,
                 "discovered": True,
                 "data_source": "railradar",
@@ -128,6 +146,12 @@ class TrainDiscoveryService:
                 "tracking_enabled": True,
                 "message": f"Live telemetry for train {clean_num} retrieved from RailRadar."
             }
+            cls._discovery_cache[clean_num] = {
+                "success": True,
+                "payload": payload,
+                "_cached_at": time.time()
+            }
+            return payload
 
         # Step 1: Check if train already exists in database (SIMULATED mode only)
         existing_train_data = cls._find_in_database(clean_num, db)
@@ -186,9 +210,9 @@ class TrainDiscoveryService:
         elif delay > 0:
             status = "MINOR_DELAY"
 
-        # Resolve Source and Destination stations if identifiable from halts
-        source_station_id = RealtimePipeline.resolve_station(db, live_data.get("previous_station_code") or live_data.get("previous_station"))
-        dest_station_id = RealtimePipeline.resolve_station(db, live_data.get("next_station_code") or live_data.get("next_station"))
+        # Resolve Source and Destination stations from live_data
+        source_station_id = RealtimePipeline.resolve_station(db, live_data.get("source_code") or live_data.get("source"), live_data=live_data)
+        dest_station_id = RealtimePipeline.resolve_station(db, live_data.get("destination_code") or live_data.get("destination"), live_data=live_data)
 
         # Step 5: Create Master Train Record in Supabase trains table
         train_uuid = cls._create_train_master_record(
@@ -212,8 +236,8 @@ class TrainDiscoveryService:
         RealtimePipeline.register_dynamic_train(clean_num)
 
         # Step 7: Persist initial operational snapshot into train_positions
-        curr_st_id = RealtimePipeline.resolve_station(db, live_data.get("current_station_code") or live_data.get("current_station"))
-        next_st_id = RealtimePipeline.resolve_station(db, live_data.get("next_station_code") or live_data.get("next_station"))
+        curr_st_id = RealtimePipeline.resolve_station(db, live_data.get("current_station_code") or live_data.get("current_station"), live_data=live_data)
+        next_st_id = RealtimePipeline.resolve_station(db, live_data.get("next_station_code") or live_data.get("next_station"), live_data=live_data)
         
         snapshot_id = RealtimePipeline.persist_snapshot(
             db=db,
@@ -224,8 +248,10 @@ class TrainDiscoveryService:
         )
 
         # Step 8: Build clean frontend response payload
-        src_city = live_data.get("previous_station") or "Unknown"
-        dst_city = live_data.get("next_station") or "Unknown"
+        src_city = live_data.get("source") or "Origin"
+        src_code = live_data.get("source_code") or "SRC"
+        dst_city = live_data.get("destination") or "Destination"
+        dst_code = live_data.get("destination_code") or "DST"
 
         train_payload = {
             "id": clean_num,
@@ -233,24 +259,39 @@ class TrainDiscoveryService:
             "train_number": clean_num,
             "train_name": train_name,
             "source": src_city,
-            "source_code": live_data.get("previous_station_code") or "SRC",
+            "source_code": src_code,
+            "source_latitude": live_data.get("source_latitude"),
+            "source_longitude": live_data.get("source_longitude"),
+            "source_details": live_data.get("source_details"),
             "destination": dst_city,
-            "destination_code": live_data.get("next_station_code") or "DST",
+            "destination_code": dst_code,
+            "destination_latitude": live_data.get("destination_latitude"),
+            "destination_longitude": live_data.get("destination_longitude"),
+            "destination_details": live_data.get("destination_details"),
             "status": status,
             "delay_minutes": delay,
             "current_station": live_data.get("current_station"),
             "current_station_code": live_data.get("current_station_code"),
             "next_station": live_data.get("next_station"),
             "next_station_code": live_data.get("next_station_code"),
-            "speed": live_data.get("speed_kmph"),
+            "speed": live_data.get("speed") if live_data.get("speed") is not None else live_data.get("speed_kmph"),
+            "speed_kmph": live_data.get("speed_kmph") if live_data.get("speed_kmph") is not None else live_data.get("speed"),
+            "speed_status": live_data.get("speed_status") or live_data.get("speedStatus") or ("LIVE" if (live_data.get("speed") is not None or live_data.get("speed_kmph") is not None) else "UNAVAILABLE"),
+            "speedStatus": live_data.get("speed_status") or live_data.get("speedStatus") or ("LIVE" if (live_data.get("speed") is not None or live_data.get("speed_kmph") is not None) else "UNAVAILABLE"),
+            "speed_unit": live_data.get("speed_unit", "km/h"),
             "latitude": live_data.get("latitude"),
             "longitude": live_data.get("longitude"),
-            "data_source": live_data.get("source", "RAILRADAR"),
+            "location_type": live_data.get("location_type"),
+            "station_latitude": live_data.get("station_latitude"),
+            "station_longitude": live_data.get("station_longitude"),
+            "data_source": "railradar",
             "data_status": live_data.get("data_status", "LIVE"),
             "timestamp": live_data.get("timestamp"),
             "tracking_enabled": True,
             "timeline": live_data.get("timeline") or live_data.get("halts", []),
-            "halts": live_data.get("timeline") or live_data.get("halts", [])
+            "halts": live_data.get("timeline") or live_data.get("halts", []),
+            "stations": live_data.get("stations", live_data.get("timeline", [])),
+            "route_coordinates": live_data.get("route_coordinates", [])
         }
 
         response = {

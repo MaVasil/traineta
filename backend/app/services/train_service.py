@@ -49,28 +49,45 @@ class TrainService:
                     .order_by(TrainPosition.recorded_at.desc())
                     .first()
                 )
-                delay = pos.current_delay_minutes if pos else (6 if t.status == "MINOR_DELAY" else (18 if t.status == "MAJOR_DELAY" else 0))
-                curr_station = pos.current_station.station_name if (pos and pos.current_station) else (t.source_station.station_name if t.source_station else "In Transit")
-                curr_code = pos.current_station.station_code if (pos and pos.current_station) else (t.source_station.station_code if t.source_station else "TRN")
-                next_station = pos.next_station.station_name if (pos and pos.next_station) else (t.destination_station.station_name if t.destination_station else "Approaching")
-                next_code = pos.next_station.station_code if (pos and pos.next_station) else (t.destination_station.station_code if t.destination_station else "APR")
-                speed = pos.speed if (pos and pos.speed is not None) else None
-                lat = float(pos.latitude) if (pos and pos.latitude is not None) else None
-                lng = float(pos.longitude) if (pos and pos.longitude is not None) else None
-                station_lat = float(pos.current_station.latitude) if (pos and pos.current_station and pos.current_station.latitude is not None) else None
-                station_lng = float(pos.current_station.longitude) if (pos and pos.current_station and pos.current_station.longitude is not None) else None
-                data_source = pos.data_source if pos else "SIMULATED"
-                data_status = pos.data_status if pos else "LIVE"
+                from app.services.train_discovery_service import TrainDiscoveryService
+                cached_disc = TrainDiscoveryService._discovery_cache.get(str(t.train_number), {}).get("payload", {}).get("train", {})
+
+                delay = cached_disc.get("delay_minutes", pos.current_delay_minutes if pos else (6 if t.status == "MINOR_DELAY" else (18 if t.status == "MAJOR_DELAY" else 0)))
+                curr_station = cached_disc.get("current_station") or (pos.current_station.station_name if (pos and pos.current_station) else (t.source_station.station_name if t.source_station else "In Transit"))
+                curr_code = cached_disc.get("current_station_code") or (pos.current_station.station_code if (pos and pos.current_station) else (t.source_station.station_code if t.source_station else "TRN"))
+                next_station = cached_disc.get("next_station") or (pos.next_station.station_name if (pos and pos.next_station) else (t.destination_station.station_name if t.destination_station else "Approaching"))
+                next_code = cached_disc.get("next_station_code") or (pos.next_station.station_code if (pos and pos.next_station) else (t.destination_station.station_code if t.destination_station else "APR"))
+                speed = cached_disc.get("speed") if cached_disc.get("speed") is not None else cached_disc.get("speed_kmph")
+                if speed is None and pos and pos.speed is not None:
+                    speed = pos.speed
+                speed_status = cached_disc.get("speed_status") or cached_disc.get("speedStatus") or ("LIVE" if speed is not None else "UNAVAILABLE")
+                lat = float(cached_disc["latitude"]) if cached_disc.get("latitude") is not None and not (cached_disc.get("latitude") == 0.0 and cached_disc.get("longitude") == 0.0) else (float(pos.latitude) if (pos and pos.latitude is not None) else None)
+                lng = float(cached_disc["longitude"]) if cached_disc.get("longitude") is not None and not (cached_disc.get("latitude") == 0.0 and cached_disc.get("longitude") == 0.0) else (float(pos.longitude) if (pos and pos.longitude is not None) else None)
+                station_lat = float(cached_disc["station_latitude"]) if cached_disc.get("station_latitude") is not None else (float(pos.current_station.latitude) if (pos and pos.current_station and pos.current_station.latitude is not None) else None)
+                station_lng = float(cached_disc["station_longitude"]) if cached_disc.get("station_longitude") is not None else (float(pos.current_station.longitude) if (pos and pos.current_station and pos.current_station.longitude is not None) else None)
+                data_source = cached_disc.get("data_source") or (pos.data_source if pos else "SIMULATED")
+                data_status = cached_disc.get("data_status") or (pos.data_status if pos else "LIVE")
+
+                source_city = cached_disc.get("source") or (t.source_station.city if t.source_station else "Origin")
+                source_code = cached_disc.get("source_code") or (t.source_station.station_code if t.source_station else "SRC")
+                dest_city = cached_disc.get("destination") or (t.destination_station.city if t.destination_station else "Destination")
+                dest_code = cached_disc.get("destination_code") or (t.destination_station.station_code if t.destination_station else "DST")
 
                 result.append({
                     "id": t.id,
                     "train_id": t.train_number,
                     "train_number": t.train_number,
                     "train_name": t.train_name,
-                    "source": t.source_station.city if t.source_station else "Unknown",
-                    "source_code": t.source_station.station_code if t.source_station else "SRC",
-                    "destination": t.destination_station.city if t.destination_station else "Unknown",
-                    "destination_code": t.destination_station.station_code if t.destination_station else "DST",
+                    "source": source_city,
+                    "source_code": source_code,
+                    "source_latitude": cached_disc.get("source_latitude"),
+                    "source_longitude": cached_disc.get("source_longitude"),
+                    "source_details": cached_disc.get("source_details"),
+                    "destination": dest_city,
+                    "destination_code": dest_code,
+                    "destination_latitude": cached_disc.get("destination_latitude"),
+                    "destination_longitude": cached_disc.get("destination_longitude"),
+                    "destination_details": cached_disc.get("destination_details"),
                     "status": t.status,
                     "delay_minutes": delay,
                     "current_station": curr_station,
@@ -78,6 +95,10 @@ class TrainService:
                     "next_station": next_station,
                     "next_station_code": next_code,
                     "speed": speed,
+                    "speed_kmph": speed,
+                    "speed_status": speed_status,
+                    "speedStatus": speed_status,
+                    "speed_unit": "km/h",
                     "latitude": lat,
                     "longitude": lng,
                     "station_latitude": station_lat,
@@ -151,29 +172,35 @@ class TrainService:
         """Finds an exact train by train_number with latest operational telemetry."""
         clean_num = str(train_number).strip()
         try:
+            from app.services.train_discovery_service import TrainDiscoveryService
+            cached_disc = TrainDiscoveryService._discovery_cache.get(clean_num, {}).get("payload", {}).get("train", {})
+            if (not cached_disc or settings.TRAIN_DATA_PROVIDER == "RAILRADAR") and clean_num.isdigit() and len(clean_num) in (4, 5, 6):
+                disc = TrainDiscoveryService.discover_train(clean_num, db=db)
+                if disc.get("success") and disc.get("train"):
+                    cached_disc = disc["train"]
+
             t = db.query(Train).filter(Train.train_number == clean_num).first()
-            if t:
+            if t or cached_disc:
                 pos = (
                     db.query(TrainPosition)
                     .filter(TrainPosition.train_id == t.id)
                     .order_by(TrainPosition.recorded_at.desc())
                     .first()
-                )
-                delay = pos.current_delay_minutes if pos else (6 if t.status == "MINOR_DELAY" else (18 if t.status == "MAJOR_DELAY" else 0))
-                curr_station = pos.current_station.station_name if (pos and pos.current_station) else (t.source_station.station_name if t.source_station else "Unknown")
-                curr_code = pos.current_station.station_code if (pos and pos.current_station) else (t.source_station.station_code if t.source_station else "UNK")
-                next_station = pos.next_station.station_name if (pos and pos.next_station) else (t.destination_station.station_name if t.destination_station else "Unknown")
-                next_code = pos.next_station.station_code if (pos and pos.next_station) else (t.destination_station.station_code if t.destination_station else "UNK")
+                ) if t else None
+                delay = pos.current_delay_minutes if pos else (cached_disc.get("delay_minutes", 0) if cached_disc else (6 if t and t.status == "MINOR_DELAY" else 0))
+                curr_station = (pos.current_station.station_name if (pos and pos.current_station) else (t.source_station.station_name if (t and t.source_station) else "Unknown"))
+                curr_code = (pos.current_station.station_code if (pos and pos.current_station) else (t.source_station.station_code if (t and t.source_station) else "UNK"))
+                next_station = (pos.next_station.station_name if (pos and pos.next_station) else (t.destination_station.station_name if (t and t.destination_station) else "Unknown"))
+                next_code = (pos.next_station.station_code if (pos and pos.next_station) else (t.destination_station.station_code if (t and t.destination_station) else "UNK"))
                 speed = pos.speed if (pos and pos.speed is not None) else None
                 lat = float(pos.latitude) if (pos and pos.latitude is not None) else None
                 lng = float(pos.longitude) if (pos and pos.longitude is not None) else None
                 station_lat = float(pos.current_station.latitude) if (pos and pos.current_station and pos.current_station.latitude is not None) else None
                 station_lng = float(pos.current_station.longitude) if (pos and pos.current_station and pos.current_station.longitude is not None) else None
-                data_source = pos.data_source if pos else "SIMULATED"
+                data_source = pos.data_source if pos else "RAILRADAR"
                 data_status = pos.data_status if pos else "LIVE"
                 timestamp = pos.recorded_at.isoformat() if pos else None
 
-                # Check discovery cache to enhance station names if unknown
                 from app.services.train_discovery_service import TrainDiscoveryService
                 cached_disc = TrainDiscoveryService._discovery_cache.get(clean_num, {}).get("payload", {}).get("train", {})
                 if cached_disc:
@@ -183,6 +210,24 @@ class TrainService:
                     if next_station == "Unknown" and cached_disc.get("next_station"):
                         next_station = cached_disc["next_station"]
                         next_code = cached_disc.get("next_station_code", next_code)
+                    if cached_disc.get("latitude") is not None and not (cached_disc.get("latitude") == 0.0 and cached_disc.get("longitude") == 0.0):
+                        lat = float(cached_disc["latitude"])
+                        lng = float(cached_disc["longitude"])
+                    if cached_disc.get("station_latitude") is not None:
+                        station_lat = float(cached_disc["station_latitude"])
+                        station_lng = float(cached_disc["station_longitude"])
+                    speed = cached_disc.get("speed") if cached_disc.get("speed") is not None else cached_disc.get("speed_kmph")
+                    speed_status = cached_disc.get("speed_status") or cached_disc.get("speedStatus") or ("LIVE" if speed is not None else "UNAVAILABLE")
+                    delay = cached_disc.get("delay_minutes", delay)
+                    data_source = cached_disc.get("data_source", data_source)
+                    data_status = cached_disc.get("data_status", data_status)
+                else:
+                    speed_status = "LIVE" if speed is not None else "UNAVAILABLE"
+
+                source_city = cached_disc.get("source") or (t.source_station.city if t.source_station else "Origin")
+                source_code = cached_disc.get("source_code") or (t.source_station.station_code if t.source_station else "SRC")
+                dest_city = cached_disc.get("destination") or (t.destination_station.city if t.destination_station else "Destination")
+                dest_code = cached_disc.get("destination_code") or (t.destination_station.station_code if t.destination_station else "DST")
 
                 return {
                     "id": t.train_number,
@@ -190,10 +235,16 @@ class TrainService:
                     "train_id": t.train_number,
                     "train_number": t.train_number,
                     "train_name": t.train_name,
-                    "source": t.source_station.city if t.source_station else (cached_disc.get("source") if cached_disc else "Unknown"),
-                    "source_code": t.source_station.station_code if t.source_station else (cached_disc.get("source_code") if cached_disc else "SRC"),
-                    "destination": t.destination_station.city if t.destination_station else (cached_disc.get("destination") if cached_disc else "Unknown"),
-                    "destination_code": t.destination_station.station_code if t.destination_station else (cached_disc.get("destination_code") if cached_disc else "DST"),
+                    "source": source_city,
+                    "source_code": source_code,
+                    "source_latitude": cached_disc.get("source_latitude"),
+                    "source_longitude": cached_disc.get("source_longitude"),
+                    "source_details": cached_disc.get("source_details"),
+                    "destination": dest_city,
+                    "destination_code": dest_code,
+                    "destination_latitude": cached_disc.get("destination_latitude"),
+                    "destination_longitude": cached_disc.get("destination_longitude"),
+                    "destination_details": cached_disc.get("destination_details"),
                     "status": t.status,
                     "delay_minutes": delay,
                     "current_station": curr_station,
@@ -201,6 +252,10 @@ class TrainService:
                     "next_station": next_station,
                     "next_station_code": next_code,
                     "speed": speed,
+                    "speed_kmph": speed,
+                    "speed_status": speed_status,
+                    "speedStatus": speed_status,
+                    "speed_unit": "km/h",
                     "latitude": lat,
                     "longitude": lng,
                     "station_latitude": station_lat,
@@ -208,7 +263,9 @@ class TrainService:
                     "data_source": data_source,
                     "data_status": data_status,
                     "timestamp": timestamp,
-                    "tracking_enabled": True
+                    "tracking_enabled": True,
+                    "stations": cached_disc.get("stations", []),
+                    "route_coordinates": cached_disc.get("route_coordinates", []),
                 }
         except Exception:
             pass
@@ -420,54 +477,113 @@ class TrainService:
 
     @staticmethod
     def get_train_position(db: Session, train_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieves latest position record from train_positions using latest timestamp."""
+        """Retrieves latest position record from train_positions using latest timestamp with discovery fallback."""
+        clean_id = str(train_id).strip()
         try:
-            train = TrainService.find_train(db, train_id)
-            if train:
-                pos = (
-                    db.query(TrainPosition)
-                    .filter(TrainPosition.train_id == train.id)
-                    .order_by(TrainPosition.recorded_at.desc())
-                    .first()
-                )
-                if pos:
-                    from app.services.train_discovery_service import TrainDiscoveryService
-                    cached_disc = TrainDiscoveryService._discovery_cache.get(str(train.train_number), {}).get("payload", {}).get("train", {})
-                    curr_st = (
-                        pos.current_station.station_name if (pos and pos.current_station)
-                        else (cached_disc.get("current_station") or (train.source_station.station_name if train.source_station else "In Transit"))
-                    )
-                    next_st = (
-                        pos.next_station.station_name if (pos and pos.next_station)
-                        else (cached_disc.get("next_station") or (train.destination_station.station_name if train.destination_station else "Approaching"))
-                    )
-                    lat = float(pos.latitude) if pos and pos.latitude is not None else None
-                    lng = float(pos.longitude) if pos and pos.longitude is not None else None
-                    station_lat = float(pos.current_station.latitude) if (pos and pos.current_station and pos.current_station.latitude is not None) else None
-                    station_lng = float(pos.current_station.longitude) if (pos and pos.current_station and pos.current_station.longitude is not None) else None
-                    speed = pos.speed if pos and pos.speed is not None else None
-                    delay = pos.current_delay_minutes if pos else 0
-                    timestamp = pos.recorded_at.isoformat() if pos else datetime.utcnow().isoformat()
-                    data_source = pos.data_source if pos else "RAILRADAR"
-                    data_status = pos.data_status if pos else "LIVE"
+            from app.services.train_discovery_service import TrainDiscoveryService
+            cached_disc = TrainDiscoveryService._discovery_cache.get(clean_id, {}).get("payload", {}).get("train", {})
+            if (not cached_disc or settings.TRAIN_DATA_PROVIDER == "RAILRADAR") and clean_id.isdigit() and len(clean_id) in (4, 5, 6):
+                disc = TrainDiscoveryService.discover_train(clean_id, db=db)
+                if disc.get("success") and disc.get("train"):
+                    cached_disc = disc["train"]
 
-                    return {
-                        "train_id": train.train_number,
-                        "latitude": lat,
-                        "longitude": lng,
-                        "station_latitude": station_lat,
-                        "station_longitude": station_lng,
-                        "current_station": curr_st,
-                        "next_station": next_st,
-                        "speed": speed,
-                        "delay": delay,
-                        "delay_minutes": delay,
-                        "timestamp": timestamp,
-                        "data_source": data_source,
-                        "data_status": data_status,
-                    }
-        except Exception:
-            pass
+            train = TrainService.find_train(db, clean_id)
+            if not train and not cached_disc:
+                return None
+
+            pos = (
+                db.query(TrainPosition)
+                .filter(TrainPosition.train_id == train.id)
+                .order_by(TrainPosition.recorded_at.desc())
+                .first()
+            ) if train else None
+
+            curr_st = (
+                pos.current_station.station_name if (pos and pos.current_station)
+                else (cached_disc.get("current_station") or (train.source_station.station_name if train and train.source_station else "In Transit"))
+            )
+            curr_code = (
+                pos.current_station.station_code if (pos and pos.current_station)
+                else (cached_disc.get("current_station_code") or (train.source_station.station_code if train and train.source_station else "TRN"))
+            )
+            next_st = (
+                pos.next_station.station_name if (pos and pos.next_station)
+                else (cached_disc.get("next_station") or (train.destination_station.station_name if train and train.destination_station else "Approaching"))
+            )
+            next_code = (
+                pos.next_station.station_code if (pos and pos.next_station)
+                else (cached_disc.get("next_station_code") or (train.destination_station.station_code if train and train.destination_station else "APR"))
+            )
+            if cached_disc and cached_disc.get("latitude") is not None and not (cached_disc.get("latitude") == 0.0 and cached_disc.get("longitude") == 0.0):
+                lat = float(cached_disc["latitude"])
+                lng = float(cached_disc["longitude"])
+            else:
+                lat = float(pos.latitude) if (pos and pos.latitude is not None) else None
+                lng = float(pos.longitude) if (pos and pos.longitude is not None) else None
+
+            if cached_disc and cached_disc.get("station_latitude") is not None:
+                station_lat = float(cached_disc["station_latitude"])
+                station_lng = float(cached_disc["station_longitude"])
+            else:
+                station_lat = float(pos.current_station.latitude) if (pos and pos.current_station and pos.current_station.latitude is not None) else None
+                station_lng = float(pos.current_station.longitude) if (pos and pos.current_station and pos.current_station.longitude is not None) else None
+
+            if cached_disc:
+                speed = cached_disc.get("speed") if cached_disc.get("speed") is not None else cached_disc.get("speed_kmph")
+                speed_status = cached_disc.get("speed_status") or cached_disc.get("speedStatus") or ("LIVE" if speed is not None else "UNAVAILABLE")
+                curr_st = cached_disc.get("current_station") or curr_st
+                curr_code = cached_disc.get("current_station_code") or curr_code
+                next_st = cached_disc.get("next_station") or next_st
+                next_code = cached_disc.get("next_station_code") or next_code
+            else:
+                speed = pos.speed if (pos and pos.speed is not None) else None
+                speed_status = "LIVE" if speed is not None else "UNAVAILABLE"
+
+            delay = cached_disc.get("delay_minutes", pos.current_delay_minutes if pos else 0)
+            timestamp = cached_disc.get("timestamp") or (pos.recorded_at.isoformat() if pos else datetime.utcnow().isoformat())
+            data_source = cached_disc.get("data_source") or (pos.data_source if pos else "RAILRADAR")
+            data_status = cached_disc.get("data_status") or (pos.data_status if pos else "LIVE")
+            location_type = cached_disc.get("location_type", "GPS" if lat else "NONE")
+
+            source_city = cached_disc.get("source") or (train.source_station.city if train and train.source_station else "Origin")
+            source_code = cached_disc.get("source_code") or (train.source_station.station_code if train and train.source_station else "SRC")
+            dest_city = cached_disc.get("destination") or (train.destination_station.city if train and train.destination_station else "Destination")
+            dest_code = cached_disc.get("destination_code") or (train.destination_station.station_code if train and train.destination_station else "DST")
+
+            return {
+                "train_id": train.train_number if train else clean_id,
+                "latitude": lat,
+                "longitude": lng,
+                "location_type": location_type,
+                "station_latitude": station_lat,
+                "station_longitude": station_lng,
+                "source": source_city,
+                "source_code": source_code,
+                "source_latitude": cached_disc.get("source_latitude"),
+                "source_longitude": cached_disc.get("source_longitude"),
+                "source_details": cached_disc.get("source_details"),
+                "destination": dest_city,
+                "destination_code": dest_code,
+                "destination_latitude": cached_disc.get("destination_latitude"),
+                "destination_longitude": cached_disc.get("destination_longitude"),
+                "destination_details": cached_disc.get("destination_details"),
+                "current_station": curr_st,
+                "current_station_code": curr_code,
+                "next_station": next_st,
+                "next_station_code": next_code,
+                "speed": speed,
+                "speed_kmph": speed,
+                "speed_status": speed_status,
+                "speedStatus": speed_status,
+                "speed_unit": "km/h",
+                "delay": delay,
+                "delay_minutes": delay,
+                "timestamp": timestamp,
+                "data_source": data_source,
+                "data_status": data_status,
+            }
+        except Exception as e:
+            logger.warning(f"[TrainService] Exception in get_train_position for {train_id}: {e}")
 
         # Fallback to get_train_by_exact_number
         exact = TrainService.get_train_by_exact_number(db, train_id)
@@ -476,10 +592,13 @@ class TrainService:
                 "train_id": exact["train_number"],
                 "latitude": exact.get("latitude"),
                 "longitude": exact.get("longitude"),
+                "location_type": exact.get("location_type", "GPS" if exact.get("latitude") else "NONE"),
                 "station_latitude": exact.get("station_latitude"),
                 "station_longitude": exact.get("station_longitude"),
                 "current_station": exact.get("current_station"),
+                "current_station_code": exact.get("current_station_code"),
                 "next_station": exact.get("next_station"),
+                "next_station_code": exact.get("next_station_code"),
                 "speed": exact.get("speed"),
                 "delay": exact.get("delay_minutes", 0),
                 "delay_minutes": exact.get("delay_minutes", 0),
@@ -506,41 +625,95 @@ class TrainService:
           "route_coordinates": []
         }
         """
-        train = TrainService.find_train(db, train_id)
-        if not train:
-            return None
-
-        routes = (
-            db.query(TrainRoute)
-            .filter(TrainRoute.train_id == train.id)
-            .order_by(TrainRoute.sequence_number.asc())
-            .all()
-        )
+        clean_id = str(train_id).strip()
+        train = TrainService.find_train(db, clean_id)
+        if not train and clean_id.isdigit() and len(clean_id) in (4, 5, 6):
+            from app.services.train_discovery_service import TrainDiscoveryService
+            disc = TrainDiscoveryService.discover_train(clean_id, db=db)
+            if disc.get("success"):
+                train = TrainService.find_train(db, clean_id)
 
         stations_list = []
         route_coords = []
-        for r in routes:
-            st = r.station
-            lat = float(st.latitude)
-            lng = float(st.longitude)
-            route_coords.append([lat, lng])
-            stations_list.append({
-                "sequence": r.sequence_number,
-                "station_name": st.station_name,
-                "name": st.station_name,
-                "station_code": st.station_code,
-                "code": st.station_code,
-                "latitude": lat,
-                "longitude": lng,
-                "scheduled_arrival": r.scheduled_arrival.strftime("%H:%M") if r.scheduled_arrival else None,
-                "scheduled_departure": r.scheduled_departure.strftime("%H:%M") if r.scheduled_departure else None,
-                "distance_from_source": float(r.distance_from_source),
-            })
+
+        if train:
+            routes = (
+                db.query(TrainRoute)
+                .filter(TrainRoute.train_id == train.id)
+                .order_by(TrainRoute.sequence_number.asc())
+                .all()
+            )
+
+            for r in routes:
+                st = r.station
+                lat = float(st.latitude) if st.latitude is not None else None
+                lng = float(st.longitude) if st.longitude is not None else None
+                if lat is not None and lng is not None and not (lat == 0.0 and lng == 0.0):
+                    route_coords.append([lat, lng])
+                stations_list.append({
+                    "sequence": r.sequence_number,
+                    "station_name": st.station_name,
+                    "name": st.station_name,
+                    "station_code": st.station_code,
+                    "code": st.station_code,
+                    "latitude": lat,
+                    "longitude": lng,
+                    "scheduled_arrival": r.scheduled_arrival.strftime("%H:%M") if r.scheduled_arrival else None,
+                    "scheduled_departure": r.scheduled_departure.strftime("%H:%M") if r.scheduled_departure else None,
+                    "distance_from_source": float(r.distance_from_source),
+                })
+
+        # Fallback to RailRadar discovery cache or discovery provider if DB routes are empty
+        if not stations_list or not route_coords:
+            from app.services.train_discovery_service import TrainDiscoveryService
+            cached_payload = TrainDiscoveryService._discovery_cache.get(clean_id, {}).get("payload", {})
+            cached_train = cached_payload.get("train", {})
+            if not cached_train and clean_id.isdigit():
+                disc = TrainDiscoveryService.discover_train(clean_id, db=db)
+                if disc.get("success"):
+                    cached_train = disc.get("train", {})
+
+            if cached_train:
+                if not stations_list:
+                    raw_stations = cached_train.get("stations") or cached_train.get("timeline") or cached_train.get("halts") or []
+                    for idx, s in enumerate(raw_stations):
+                        st_lat = s.get("latitude") or s.get("lat")
+                        st_lng = s.get("longitude") or s.get("lng")
+                        st_code = s.get("station_code") or s.get("code") or ""
+                        st_name = s.get("station_name") or s.get("name") or st_code
+                        stations_list.append({
+                            "sequence": s.get("sequence", idx + 1),
+                            "station_name": st_name,
+                            "name": st_name,
+                            "station_code": st_code,
+                            "code": st_code,
+                            "latitude": float(st_lat) if st_lat is not None else None,
+                            "longitude": float(st_lng) if st_lng is not None else None,
+                            "scheduled_arrival": s.get("scheduled_arrival") or s.get("scheduledArr"),
+                            "scheduled_departure": s.get("scheduled_departure") or s.get("scheduledDep"),
+                            "distance_from_source": float(s.get("distance_from_source") or s.get("distance") or 0.0),
+                            "is_halt": s.get("is_halt", True),
+                            "status": s.get("status"),
+                            "state": s.get("state"),
+                        })
+                if not route_coords:
+                    route_coords = cached_train.get("route_coordinates", [])
+                    # If track geometry is not available, derive from valid station coordinates
+                    if not route_coords and stations_list:
+                        route_coords = [
+                            [s["latitude"], s["longitude"]]
+                            for s in stations_list
+                            if s.get("latitude") is not None and s.get("longitude") is not None
+                            and not (s["latitude"] == 0.0 and s["longitude"] == 0.0)
+                        ]
+
+        if not train and not stations_list:
+            return None
 
         return {
-            "train_id": train.train_number,
-            "train_number": train.train_number,
-            "train_name": train.train_name,
+            "train_id": train.train_number if train else clean_id,
+            "train_number": train.train_number if train else clean_id,
+            "train_name": train.train_name if train else (cached_train.get("train_name") if 'cached_train' in locals() else f"Express {clean_id}"),
             "stations": stations_list,
             "route_coordinates": route_coords,
         }
@@ -548,7 +721,7 @@ class TrainService:
     @staticmethod
     def get_train_map(db: Session, train_id: str) -> Optional[Dict[str, Any]]:
         """
-        Returns all geospatial telemetry required by Leaflet:
+        Returns all geospatial telemetry required by Google Maps / Leaflet:
         {
           "train_id": "12401",
           "current_position": { "latitude": 17.8500, "longitude": 79.4000 },
@@ -561,26 +734,102 @@ class TrainService:
           "route_coordinates": []
         }
         """
-        train = TrainService.find_train(db, train_id)
-        if not train:
+        clean_id = str(train_id).strip()
+        from app.services.train_discovery_service import TrainDiscoveryService
+        cached_payload = TrainDiscoveryService._discovery_cache.get(clean_id, {}).get("payload", {})
+        cached_train = cached_payload.get("train", {})
+        if (not cached_train or settings.TRAIN_DATA_PROVIDER == "RAILRADAR") and clean_id.isdigit() and len(clean_id) in (4, 5, 6):
+            disc = TrainDiscoveryService.discover_train(clean_id, db=db)
+            if disc.get("success"):
+                cached_train = disc.get("train", {})
+
+        train = TrainService.find_train(db, clean_id)
+        if not train and not cached_train:
             return None
 
-        pos_data = TrainService.get_train_position(db, train_id)
-        route_data = TrainService.get_train_route(db, train_id)
+        pos_data = TrainService.get_train_position(db, clean_id)
+        route_data = TrainService.get_train_route(db, clean_id)
+
+        lat = pos_data.get("latitude") if pos_data else None
+        lng = pos_data.get("longitude") if pos_data else None
+        if (lat is None or (lat == 0.0 and lng == 0.0)) and cached_train:
+            lat = cached_train.get("latitude")
+            lng = cached_train.get("longitude")
+
+        st_lat = pos_data.get("station_latitude") if pos_data else None
+        st_lng = pos_data.get("station_longitude") if pos_data else None
+        if (st_lat is None or (st_lat == 0.0 and st_lng == 0.0)) and cached_train:
+            st_lat = cached_train.get("station_latitude")
+            st_lng = cached_train.get("station_longitude")
+
+        loc_type = (pos_data.get("location_type") if pos_data else None) or cached_train.get("location_type") or ("GPS" if lat else "NONE")
+
+        stations = (route_data.get("stations") if route_data else None) or cached_train.get("stations") or []
+        route_coords = (route_data.get("route_coordinates") if route_data else None) or cached_train.get("route_coordinates") or []
+
+        source_city = cached_train.get("source") or (train.source_station.city if train and train.source_station else "Origin")
+        source_code = cached_train.get("source_code") or (train.source_station.station_code if train and train.source_station else "SRC")
+        source_lat = cached_train.get("source_latitude") or (float(train.source_station.latitude) if train and train.source_station and train.source_station.latitude else None)
+        source_lng = cached_train.get("source_longitude") or (float(train.source_station.longitude) if train and train.source_station and train.source_station.longitude else None)
+        source_details = cached_train.get("source_details") or {
+            "code": source_code,
+            "name": source_city,
+            "latitude": source_lat,
+            "longitude": source_lng,
+        }
+
+        dest_city = cached_train.get("destination") or (train.destination_station.city if train and train.destination_station else "Destination")
+        dest_code = cached_train.get("destination_code") or (train.destination_station.station_code if train and train.destination_station else "DST")
+        dest_lat = cached_train.get("destination_latitude") or (float(train.destination_station.latitude) if train and train.destination_station and train.destination_station.latitude else None)
+        dest_lng = cached_train.get("destination_longitude") or (float(train.destination_station.longitude) if train and train.destination_station and train.destination_station.longitude else None)
+        dest_details = cached_train.get("destination_details") or {
+            "code": dest_code,
+            "name": dest_city,
+            "latitude": dest_lat,
+            "longitude": dest_lng,
+        }
+
+        speed = cached_train.get("speed") if cached_train.get("speed") is not None else (pos_data.get("speed") if pos_data else None)
+        speed_status = cached_train.get("speed_status") or cached_train.get("speedStatus") or (pos_data.get("speed_status") if pos_data else "UNAVAILABLE")
 
         return {
-            "train_id": train.train_number,
+            "train_id": train.train_number if train else clean_id,
+            "train_number": train.train_number if train else clean_id,
+            "train_name": train.train_name if train else (cached_train.get("train_name") or f"Express {clean_id}"),
+            "source": source_city,
+            "source_code": source_code,
+            "source_latitude": source_lat,
+            "source_longitude": source_lng,
+            "source_details": source_details,
+            "destination": dest_city,
+            "destination_code": dest_code,
+            "destination_latitude": dest_lat,
+            "destination_longitude": dest_lng,
+            "destination_details": dest_details,
             "current_position": {
-                "latitude": pos_data["latitude"] if pos_data else None,
-                "longitude": pos_data["longitude"] if pos_data else None
+                "latitude": lat,
+                "longitude": lng,
             },
-            "current_station": pos_data["current_station"] if pos_data else "In Transit",
-            "next_station": pos_data["next_station"] if pos_data else "Approaching",
-            "speed": pos_data["speed"] if pos_data else None,
-            "delay_minutes": pos_data["delay_minutes"] if pos_data else 0,
-            "timestamp": pos_data["timestamp"] if pos_data else None,
-            "stations": route_data["stations"] if route_data else [],
-            "route_coordinates": route_data["route_coordinates"] if route_data else [],
+            "station_position": {
+                "latitude": st_lat,
+                "longitude": st_lng,
+            },
+            "location_type": loc_type,
+            "current_station": pos_data.get("current_station") if pos_data else (cached_train.get("current_station") or "In Transit"),
+            "current_station_code": pos_data.get("current_station_code") if pos_data else (cached_train.get("current_station_code") or "TRN"),
+            "next_station": pos_data.get("next_station") if pos_data else (cached_train.get("next_station") or "Approaching"),
+            "next_station_code": pos_data.get("next_station_code") if pos_data else (cached_train.get("next_station_code") or "APR"),
+            "speed": speed,
+            "speed_kmph": speed,
+            "speed_status": speed_status,
+            "speedStatus": speed_status,
+            "speed_unit": "km/h",
+            "delay_minutes": pos_data.get("delay_minutes") if pos_data else cached_train.get("delay_minutes", 0),
+            "timestamp": pos_data.get("timestamp") if pos_data else (cached_train.get("timestamp") or datetime.utcnow().isoformat()),
+            "data_source": pos_data.get("data_source") if pos_data else (cached_train.get("data_source") or "RAILRADAR"),
+            "data_status": pos_data.get("data_status") if pos_data else (cached_train.get("data_status") or "LIVE"),
+            "stations": stations,
+            "route_coordinates": route_coords,
         }
 
     @staticmethod
@@ -746,87 +995,151 @@ class TrainService:
     @staticmethod
     def get_train_details(db: Session, train_number: str) -> Optional[Dict[str, Any]]:
         try:
-            train = TrainService.find_train(db, train_number)
-            if not train:
-                clean_id = str(train_number).strip()
-                if clean_id.isdigit() and len(clean_id) in (4, 5, 6):
-                    from app.services.train_discovery_service import TrainDiscoveryService
-                    disc = TrainDiscoveryService.discover_train(clean_id, db=db)
-                    if disc.get("success"):
-                        train = TrainService.find_train(db, clean_id)
-            if train:
-                pos = (
-                    db.query(TrainPosition)
-                    .filter(TrainPosition.train_id == train.id)
-                    .order_by(TrainPosition.recorded_at.desc())
-                    .first()
-                )
+            clean_id = str(train_number).strip()
+            from app.services.train_discovery_service import TrainDiscoveryService
+            cached_disc = TrainDiscoveryService._discovery_cache.get(clean_id, {}).get("payload", {}).get("train", {})
+            if (not cached_disc or settings.TRAIN_DATA_PROVIDER == "RAILRADAR") and clean_id.isdigit() and len(clean_id) in (4, 5, 6):
+                disc = TrainDiscoveryService.discover_train(clean_id, db=db)
+                if disc.get("success") and disc.get("train"):
+                    cached_disc = disc["train"]
 
-                from app.services.train_discovery_service import TrainDiscoveryService
-                cached_disc = TrainDiscoveryService._discovery_cache.get(str(train.train_number), {}).get("payload", {}).get("train", {})
+            train = TrainService.find_train(db, clean_id)
+            if not train and not cached_disc:
+                return None
 
-                current_st = (
-                    pos.current_station.station_name if (pos and pos.current_station)
-                    else (cached_disc.get("current_station") or (train.source_station.station_name if train.source_station else "In Transit"))
-                )
-                current_st_code = (
-                    pos.current_station.station_code if (pos and pos.current_station)
-                    else (cached_disc.get("current_station_code") or (train.source_station.station_code if train.source_station else "TRN"))
-                )
-                next_st = (
-                    pos.next_station.station_name if (pos and pos.next_station)
-                    else (cached_disc.get("next_station") or (train.destination_station.station_name if train.destination_station else "Approaching"))
-                )
-                next_st_code = (
-                    pos.next_station.station_code if (pos and pos.next_station)
-                    else (cached_disc.get("next_station_code") or (train.destination_station.station_code if train.destination_station else "APR"))
-                )
-                speed = pos.speed if pos and pos.speed is not None else None
-                delay = pos.current_delay_minutes if pos else 0
-                data_source = pos.data_source if pos else "RAILRADAR"
-                data_status = pos.data_status if pos else "LIVE"
-                lat = float(pos.latitude) if (pos and pos.latitude is not None) else None
-                lng = float(pos.longitude) if (pos and pos.longitude is not None) else None
-                station_lat = float(pos.current_station.latitude) if (pos and pos.current_station and pos.current_station.latitude is not None) else None
-                station_lng = float(pos.current_station.longitude) if (pos and pos.current_station and pos.current_station.longitude is not None) else None
-                timestamp = pos.recorded_at.isoformat() if pos else datetime.utcnow().isoformat()
+            pos = (
+                db.query(TrainPosition)
+                .filter(TrainPosition.train_id == train.id)
+                .order_by(TrainPosition.recorded_at.desc())
+                .first()
+            ) if train else None
 
-                # Dynamic ML / Baseline ETA
-                from app.services.eta_service import ETAService
-                eta_data = ETAService.get_train_eta(db, str(train.train_number))
+            current_st = (
+                pos.current_station.station_name if (pos and pos.current_station)
+                else (cached_disc.get("current_station") or (train.source_station.station_name if train and train.source_station else "In Transit"))
+            )
+            current_st_code = (
+                pos.current_station.station_code if (pos and pos.current_station)
+                else (cached_disc.get("current_station_code") or (train.source_station.station_code if train and train.source_station else "TRN"))
+            )
+            next_st = (
+                pos.next_station.station_name if (pos and pos.next_station)
+                else (cached_disc.get("next_station") or (train.destination_station.station_name if train and train.destination_station else "Approaching"))
+            )
+            next_st_code = (
+                pos.next_station.station_code if (pos and pos.next_station)
+                else (cached_disc.get("next_station_code") or (train.destination_station.station_code if train and train.destination_station else "APR"))
+            )
+            if cached_disc:
+                speed = cached_disc.get("speed") if cached_disc.get("speed") is not None else cached_disc.get("speed_kmph")
+                speed_status = cached_disc.get("speed_status") or cached_disc.get("speedStatus") or ("LIVE" if speed is not None else "UNAVAILABLE")
+                if cached_disc.get("latitude") is not None and not (cached_disc.get("latitude") == 0.0 and cached_disc.get("longitude") == 0.0):
+                    lat = float(cached_disc["latitude"])
+                    lng = float(cached_disc["longitude"])
+                if cached_disc.get("station_latitude") is not None:
+                    station_lat = float(cached_disc["station_latitude"])
+                    station_lng = float(cached_disc["station_longitude"])
+                current_st = cached_disc.get("current_station") or current_st
+                current_st_code = cached_disc.get("current_station_code") or current_st_code
+                next_st = cached_disc.get("next_station") or next_st
+                next_st_code = cached_disc.get("next_station_code") or next_st_code
+            else:
+                speed = pos.speed if (pos and pos.speed is not None) else None
+                speed_status = "LIVE" if speed is not None else "UNAVAILABLE"
+            delay = cached_disc.get("delay_minutes", pos.current_delay_minutes if pos else 0)
+            data_source = cached_disc.get("data_source") or (pos.data_source if pos else "RAILRADAR")
+            data_status = cached_disc.get("data_status") or (pos.data_status if pos else "LIVE")
+            if (lat is None or (lat == 0.0 and lng == 0.0)) and cached_disc:
+                if cached_disc.get("latitude") is not None and not (cached_disc.get("latitude") == 0.0 and cached_disc.get("longitude") == 0.0):
+                    lat = float(cached_disc["latitude"])
+                    lng = float(cached_disc["longitude"])
 
-                sch_eta = eta_data.get("scheduled_eta", "22:36") if eta_data else "22:36"
-                prd_eta = eta_data.get("predicted_eta", "22:42") if eta_data else "22:42"
-                conf = int(eta_data.get("confidence", 0.9) * 100) if (eta_data and eta_data.get("confidence", 0.9) <= 1.0) else (int(eta_data.get("confidence", 90)) if eta_data else 90)
+            station_lat = float(pos.current_station.latitude) if (pos and pos.current_station and pos.current_station.latitude is not None) else None
+            station_lng = float(pos.current_station.longitude) if (pos and pos.current_station and pos.current_station.longitude is not None) else None
+            if (station_lat is None or (station_lat == 0.0 and station_lng == 0.0)) and cached_disc:
+                if cached_disc.get("station_latitude") is not None:
+                    station_lat = float(cached_disc["station_latitude"])
+                    station_lng = float(cached_disc["station_longitude"])
 
-                tl_data = TrainService.get_train_timeline(db, str(train.train_number))
-                timeline = tl_data["timeline"] if tl_data else []
+            location_type = cached_disc.get("location_type", "GPS" if lat else "NONE")
+            stations = cached_disc.get("stations") or cached_disc.get("timeline") or []
+            route_coordinates = cached_disc.get("route_coordinates") or []
+            timestamp = pos.recorded_at.isoformat() if pos else datetime.utcnow().isoformat()
 
-                return {
-                    "id": train.train_number,       # explicit id for frontend mapper
-                    "train_number": train.train_number,
-                    "train_name": train.train_name,
-                    "source": train.source_station.city if train.source_station else (cached_disc.get("source") or "Unknown"),
-                    "destination": train.destination_station.city if train.destination_station else (cached_disc.get("destination") or "Unknown"),
-                    "current_station": current_st,
-                    "current_station_code": current_st_code,
-                    "next_station": next_st,
-                    "next_station_code": next_st_code,
-                    "current_speed": speed,
-                    "current_delay": delay,
-                    "delay_minutes": delay,
-                    "scheduled_eta": sch_eta,
-                    "predicted_eta": prd_eta,
-                    "prediction_confidence": conf,
-                    "timeline": timeline,
-                    "latitude": lat,
-                    "longitude": lng,
-                    "station_latitude": station_lat,
-                    "station_longitude": station_lng,
-                    "data_source": data_source,
-                    "data_status": data_status,
-                    "timestamp": timestamp,
-                }
+            source_city = cached_disc.get("source") or (train.source_station.city if train and train.source_station else "Origin")
+            source_code = cached_disc.get("source_code") or (train.source_station.station_code if train and train.source_station else "SRC")
+            source_lat = cached_disc.get("source_latitude") or (float(train.source_station.latitude) if train and train.source_station and train.source_station.latitude else None)
+            source_lng = cached_disc.get("source_longitude") or (float(train.source_station.longitude) if train and train.source_station and train.source_station.longitude else None)
+            source_details = cached_disc.get("source_details") or {
+                "code": source_code,
+                "name": source_city,
+                "latitude": source_lat,
+                "longitude": source_lng,
+            }
+
+            dest_city = cached_disc.get("destination") or (train.destination_station.city if train and train.destination_station else "Destination")
+            dest_code = cached_disc.get("destination_code") or (train.destination_station.station_code if train and train.destination_station else "DST")
+            dest_lat = cached_disc.get("destination_latitude") or (float(train.destination_station.latitude) if train and train.destination_station and train.destination_station.latitude else None)
+            dest_lng = cached_disc.get("destination_longitude") or (float(train.destination_station.longitude) if train and train.destination_station and train.destination_station.longitude else None)
+            dest_details = cached_disc.get("destination_details") or {
+                "code": dest_code,
+                "name": dest_city,
+                "latitude": dest_lat,
+                "longitude": dest_lng,
+            }
+
+            # Dynamic ML / Baseline ETA
+            from app.services.eta_service import ETAService
+            eta_data = ETAService.get_train_eta(db, str(train.train_number if train else clean_id))
+
+            sch_eta = eta_data.get("scheduled_eta", "22:36") if eta_data else "22:36"
+            prd_eta = eta_data.get("predicted_eta", "22:42") if eta_data else "22:42"
+            conf = int(eta_data.get("confidence", 0.9) * 100) if (eta_data and eta_data.get("confidence", 0.9) <= 1.0) else (int(eta_data.get("confidence", 90)) if eta_data else 90)
+
+            tl_data = TrainService.get_train_timeline(db, str(train.train_number if train else clean_id))
+            timeline = tl_data["timeline"] if tl_data else []
+
+            return {
+                "id": train.train_number if train else clean_id,       # explicit id for frontend mapper
+                "train_number": train.train_number if train else clean_id,
+                "train_name": (train.train_name if train else cached_disc.get("train_name")) or f"Express {clean_id}",
+                "source": source_city,
+                "source_code": source_code,
+                "source_latitude": source_lat,
+                "source_longitude": source_lng,
+                "source_details": source_details,
+                "destination": dest_city,
+                "destination_code": dest_code,
+                "destination_latitude": dest_lat,
+                "destination_longitude": dest_lng,
+                "destination_details": dest_details,
+                "current_station": current_st,
+                "current_station_code": current_st_code,
+                "next_station": next_st,
+                "next_station_code": next_st_code,
+                "speed": speed,
+                "speed_kmph": speed,
+                "speed_status": speed_status,
+                "speedStatus": speed_status,
+                "speed_unit": "km/h",
+                "current_speed": speed,
+                "current_delay": delay,
+                "delay_minutes": delay,
+                "scheduled_eta": sch_eta,
+                "predicted_eta": prd_eta,
+                "prediction_confidence": conf,
+                "timeline": timeline,
+                "stations": stations if stations else timeline,
+                "route_coordinates": route_coordinates,
+                "latitude": lat,
+                "longitude": lng,
+                "location_type": location_type,
+                "station_latitude": station_lat,
+                "station_longitude": station_lng,
+                "data_source": data_source,
+                "data_status": data_status,
+                "timestamp": timestamp,
+            }
         except Exception as e:
             logger.warning(f"[TrainService] Exception in get_train_details for {train_number}: {e}")
 
@@ -852,8 +1165,11 @@ class TrainService:
                 "predicted_eta": "22:42",
                 "prediction_confidence": 91,
                 "timeline": timeline,
+                "stations": exact.get("stations", timeline),
+                "route_coordinates": exact.get("route_coordinates", []),
                 "latitude": exact.get("latitude"),
                 "longitude": exact.get("longitude"),
+                "location_type": exact.get("location_type", "GPS" if exact.get("latitude") else "NONE"),
                 "station_latitude": exact.get("station_latitude"),
                 "station_longitude": exact.get("station_longitude"),
                 "data_source": exact.get("data_source", "RAILRADAR"),

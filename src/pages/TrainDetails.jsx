@@ -136,7 +136,13 @@ export function TrainDetails() {
             {[
               { icon: MapPin, label: 'Current Location', value: train.currentStation, sub: train.currentStationCode, color: 'from-blue-500 to-indigo-600' },
               { icon: Navigation, label: 'Next Station', value: train.nextStation, sub: train.nextStationCode, color: 'from-violet-500 to-purple-600' },
-              { icon: Gauge, label: 'Current Speed', value: train.currentSpeed != null ? `${train.currentSpeed} km/h` : 'Unavailable', sub: train.currentSpeed != null ? 'Traction Active' : 'No Data', color: 'from-cyan-500 to-blue-600' },
+              { 
+                icon: Gauge, 
+                label: 'Current Speed', 
+                value: (train.speed ?? train.currentSpeed) != null ? `${train.speed ?? train.currentSpeed} km/h` : 'Speed unavailable', 
+                sub: (train.speed ?? train.currentSpeed) === 0 ? 'Stationary' : ((train.speed ?? train.currentSpeed) != null ? 'Live Speed' : 'Not Reported'), 
+                color: 'from-cyan-500 to-blue-600' 
+              },
               { icon: Clock, label: 'Current Delay', value: train.currentDelayMin < 0 ? `${Math.abs(train.currentDelayMin)} min ahead` : (train.currentDelayMin > 0 ? `${train.currentDelayMin} min late` : 'On time'), sub: train.currentDelayMin < 0 ? 'Ahead of Schedule' : (train.currentDelayMin > 0 ? 'Delayed' : 'On Schedule'), color: train.currentDelayMin < 0 ? 'from-emerald-500 to-teal-600' : (train.currentDelayMin > 0 ? 'from-amber-500 to-orange-600' : 'from-emerald-500 to-teal-600') },
             ].map(({ icon: I, label, value, sub, color }) => (
               <div key={label} className="p-4 rounded-xl bg-slate-50/80 dark:bg-slate-800/30 border border-slate-100/50 dark:border-slate-700/30">

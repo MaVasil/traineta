@@ -92,13 +92,60 @@ async function fetchFromApi(path, options = {}) {
 }
 
 /**
- * Normalizes backend FastAPI / Supabase train object to match TrainCard and Dashboard UI props
+ * Validates latitude and longitude coordinates.
+ * Strictly rejects null, undefined, NaN, and (0, 0) Null Island.
+ */
+export function isValidCoordinate(lat, lng) {
+  if (lat == null || lng == null) return false;
+  const nLat = Number(lat);
+  const nLng = Number(lng);
+  if (isNaN(nLat) || isNaN(nLng)) return false;
+  if (nLat === 0 && nLng === 0) return false;
+  if (nLat < -90 || nLat > 90 || nLng < -180 || nLng > 180) return false;
+  return true;
+}
+
+/**
+ * Normalizes coordinate pair [c1, c2] or (lat, lng) into { lat, lng }.
+ * Detects and handles GeoJSON [longitude, latitude] coordinate inversion.
+ * In India: Latitude is ~8° to 38° N, Longitude is ~68° to 98° E.
+ */
+export function parseCoordinatePair(c1, c2) {
+  if (c1 == null || c2 == null) return null;
+  const n1 = Number(c1);
+  const n2 = Number(c2);
+  if (isNaN(n1) || isNaN(n2)) return null;
+  if (n1 === 0 && n2 === 0) return null;
+
+  let lat, lng;
+  if (n1 > 50 && n2 >= -45 && n2 <= 45) {
+    // n1 is longitude, n2 is latitude (GeoJSON [lng, lat])
+    lat = n2;
+    lng = n1;
+  } else if (n1 >= -90 && n1 <= 90 && n2 >= -180 && n2 <= 180) {
+    // standard [lat, lng]
+    lat = n1;
+    lng = n2;
+  } else if (n2 >= -90 && n2 <= 90 && n1 >= -180 && n1 <= 180) {
+    lat = n2;
+    lng = n1;
+  } else {
+    return null;
+  }
+
+  if (isValidCoordinate(lat, lng)) {
+    return { lat: Number(lat.toFixed(7)), lng: Number(lng.toFixed(7)) };
+  }
+  return null;
+}
+
+/**
+ * Normalizes backend FastAPI / Supabase train object to match TrainCard, TrainMap, and Dashboard UI props
  */
 export function mapBackendTrainToFrontend(t, isLive = false) {
   if (!t) return null;
 
   // Support both backend API schema (snake_case) and fallback demo schema (camelCase)
-  // Ensure train_number directly reflects Supabase updates
   const trainNumber = String(t.train_number ?? t.number ?? t.train_id ?? t.id ?? '');
   const trainName = t.train_name ?? t.name ?? `Express ${trainNumber}`;
   const delayMin = Number(t.delay_minutes ?? t.currentDelayMin ?? t.current_delay_minutes ?? 0);
@@ -116,14 +163,38 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
     else statusType = 'major';
   }
 
-  // Station formatting
-  const sourceCity = t.source || t.source_city || 'Origin';
-  const sourceCode = t.source_code || t.sourceStationCode || 'SRC';
-  const sourceDisplay = sourceCity.includes('(') ? sourceCity : (sourceCode && sourceCode !== 'SRC' ? `${sourceCity} (${sourceCode})` : sourceCity);
+  // Station formatting - Canonical Origin and Terminus Endpoints
+  const rawSrcObj = (t.source_details && typeof t.source_details === 'object') ? t.source_details : (typeof t.source === 'object' ? t.source : {});
+  const sourceCode = String(rawSrcObj.code || t.source_code || t.sourceStationCode || t.stations?.[0]?.code || t.timeline?.[0]?.code || 'SRC').toUpperCase();
+  const sourceName = rawSrcObj.name || t.source_name || (typeof t.source === 'string' && t.source !== 'Unknown' ? t.source : null) || t.source_city || t.stations?.[0]?.name || t.timeline?.[0]?.name || sourceCode;
+  const sLat = rawSrcObj.latitude ?? rawSrcObj.lat ?? t.source_latitude ?? t.source_lat ?? t.stations?.[0]?.lat;
+  const sLng = rawSrcObj.longitude ?? rawSrcObj.lng ?? t.source_longitude ?? t.source_lng ?? t.stations?.[0]?.lng;
+  const sourceCoords = parseCoordinatePair(sLat, sLng);
+  const sourceObj = {
+    code: sourceCode,
+    name: sourceName,
+    latitude: sourceCoords ? sourceCoords.lat : null,
+    longitude: sourceCoords ? sourceCoords.lng : null,
+  };
 
-  const destCity = t.destination || t.destination_city || 'Destination';
-  const destCode = t.destination_code || t.destinationStationCode || 'DST';
-  const destDisplay = destCity.includes('(') ? destCity : (destCode && destCode !== 'DST' ? `${destCity} (${destCode})` : destCity);
+  const lastSt = (Array.isArray(t.stations) && t.stations.length > 0)
+    ? t.stations[t.stations.length - 1]
+    : ((Array.isArray(t.timeline) && t.timeline.length > 0) ? t.timeline[t.timeline.length - 1] : null);
+  const rawDstObj = (t.destination_details && typeof t.destination_details === 'object') ? t.destination_details : (typeof t.destination === 'object' ? t.destination : {});
+  const destCode = String(rawDstObj.code || t.destination_code || t.destinationStationCode || lastSt?.code || 'DST').toUpperCase();
+  const destName = rawDstObj.name || t.destination_name || (typeof t.destination === 'string' && t.destination !== 'Unknown' ? t.destination : null) || t.destination_city || lastSt?.name || destCode;
+  const dLat = rawDstObj.latitude ?? rawDstObj.lat ?? t.destination_latitude ?? t.destination_lat ?? lastSt?.lat;
+  const dLng = rawDstObj.longitude ?? rawDstObj.lng ?? t.destination_longitude ?? t.destination_lng ?? lastSt?.lng;
+  const destCoords = parseCoordinatePair(dLat, dLng);
+  const destinationObj = {
+    code: destCode,
+    name: destName,
+    latitude: destCoords ? destCoords.lat : null,
+    longitude: destCoords ? destCoords.lng : null,
+  };
+
+  const sourceDisplay = sourceName.includes('(') ? sourceName : (sourceCode && sourceCode !== 'SRC' ? `${sourceName} (${sourceCode})` : sourceName);
+  const destDisplay = destName.includes('(') ? destName : (destCode && destCode !== 'DST' ? `${destName} (${destCode})` : destName);
 
   // Current station & Next station
   const currentStation = t.current_station || t.currentStation || 'In Transit';
@@ -131,8 +202,9 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
   const nextStation = t.next_station || t.nextStation || 'Approaching';
   const nextStationCode = t.next_station_code || t.nextStationCode || 'APR';
 
-  // Speeds
-  const speed = t.speed != null ? Number(t.speed) : (t.currentSpeed != null ? Number(t.currentSpeed) : null);
+  // Dynamic Speeds
+  const speed = t.speed != null ? Number(t.speed) : (t.speed_kmph != null ? Number(t.speed_kmph) : (t.currentSpeed != null ? Number(t.currentSpeed) : (t.current_speed != null ? Number(t.current_speed) : null)));
+  const speedUnit = t.speed_unit || t.speedUnit || 'km/h';
 
   // Scheduled and predicted arrival
   const scheduledArrival = t.scheduled_arrival_at_next || t.scheduledArrivalAtNext || t.scheduled_arrival || '22:36';
@@ -149,16 +221,16 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
     }
   }
 
-  const rawLat = t.latitude ?? t.currentCoords?.lat;
-  const rawLng = t.longitude ?? t.currentCoords?.lng;
-  const numLat = rawLat != null ? Number(rawLat) : NaN;
-  const numLng = rawLng != null ? Number(rawLng) : NaN;
-  const hasValidCoords = !isNaN(numLat) && !isNaN(numLng);
-  const coords = hasValidCoords ? { lat: numLat, lng: numLng } : null;
+  // Strict coordinate resolution with GeoJSON inversion detection
+  const rawLat = t.latitude ?? t.currentCoords?.lat ?? t.current_position?.latitude;
+  const rawLng = t.longitude ?? t.currentCoords?.lng ?? t.current_position?.longitude;
+  const coords = parseCoordinatePair(rawLat, rawLng);
 
-  const stationLat = t.station_latitude != null ? Number(t.station_latitude) : NaN;
-  const stationLng = t.station_longitude != null ? Number(t.station_longitude) : NaN;
-  const stationCoords = !isNaN(stationLat) && !isNaN(stationLng) ? { lat: stationLat, lng: stationLng } : null;
+  const rawStLat = t.station_latitude ?? t.station_position?.latitude ?? t.stationCoords?.lat;
+  const rawStLng = t.station_longitude ?? t.station_position?.longitude ?? t.stationCoords?.lng;
+  const stationCoords = parseCoordinatePair(rawStLat, rawStLng);
+
+  const locationType = t.location_type || (coords ? 'GPS' : (stationCoords ? 'STATION' : 'NONE'));
 
   const dataSource = t.data_source || t.dataSource || 'SIMULATED';
   const dataStatus = t.data_status || t.dataStatus || 'LIVE';
@@ -169,15 +241,15 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
     : (Array.isArray(t.halts) && t.halts.length > 0 ? t.halts : []);
 
   const timeline = rawTimeline.map((item, idx) => {
-    const code = item.station_code || item.code || item.stationCode || '';
+    const code = String(item.station_code || item.code || item.stationCode || '').toUpperCase();
     const name = item.station_name || item.name || item.stationName || code;
     const isHalt = item.is_halt !== undefined ? Boolean(item.is_halt) : (item.isHalt !== undefined ? Boolean(item.isHalt) : true);
     
     let state = (item.state || '').toLowerCase();
     const statusUpper = (item.status || '').toUpperCase();
     if (!state) {
-      if (statusUpper === 'CURRENT' || (currentStationCode && code.toUpperCase() === currentStationCode.toUpperCase())) state = 'current';
-      else if (statusUpper === 'NEXT' || (nextStationCode && code.toUpperCase() === nextStationCode.toUpperCase())) state = 'next';
+      if (statusUpper === 'CURRENT' || (currentStationCode && code === currentStationCode.toUpperCase())) state = 'current';
+      else if (statusUpper === 'NEXT' || (nextStationCode && code === nextStationCode.toUpperCase())) state = 'next';
       else if (statusUpper === 'COMPLETED' || statusUpper === 'DEPARTED') state = 'completed';
       else state = 'upcoming';
     }
@@ -187,12 +259,20 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
     const actArr = item.actual_arrival || item.actualArr || item.actualArrival || '--';
     const actDep = item.actual_departure || item.actualDep || item.actualDeparture || '--';
 
+    const itemLat = item.latitude ?? item.lat;
+    const itemLng = item.longitude ?? item.lng;
+    const itemValidCoords = parseCoordinatePair(itemLat, itemLng);
+
     return {
       sequence: item.sequence != null ? Number(item.sequence) : idx + 1,
       code,
       station_code: code,
       name,
       station_name: name,
+      latitude: itemValidCoords ? itemValidCoords.lat : null,
+      longitude: itemValidCoords ? itemValidCoords.lng : null,
+      lat: itemValidCoords ? itemValidCoords.lat : null,
+      lng: itemValidCoords ? itemValidCoords.lng : null,
       isHalt,
       is_halt: isHalt,
       status: statusUpper || state.toUpperCase(),
@@ -214,6 +294,60 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
     };
   });
 
+  // Track geometry coordinates mapping for polyline
+  const rawRouteCoords = Array.isArray(t.route_coordinates)
+    ? t.route_coordinates
+    : (Array.isArray(t.routeCoordinates) ? t.routeCoordinates : []);
+
+  const routeCoordinates = rawRouteCoords
+    .map((pt) => {
+      if (Array.isArray(pt) && pt.length >= 2) {
+        return parseCoordinatePair(pt[0], pt[1]);
+      } else if (pt && typeof pt === 'object' && 'lat' in pt && 'lng' in pt) {
+        return parseCoordinatePair(pt.lat, pt.lng);
+      }
+      return null;
+    })
+    .filter(Boolean);
+
+  // Normalized stations for map markers
+  const rawStations = Array.isArray(t.stations) && t.stations.length > 0
+    ? t.stations
+    : timeline;
+
+  const stations = rawStations.map((st, idx) => {
+    const code = String(st.station_code || st.code || st.stationCode || '').toUpperCase();
+    const name = st.station_name || st.name || st.stationName || code;
+    const sLat = st.latitude ?? st.lat;
+    const sLng = st.longitude ?? st.lng;
+    const validStationCoord = parseCoordinatePair(sLat, sLng);
+    const isPassed = st.state === 'completed' || st.status === 'COMPLETED' || st.status === 'DEPARTED';
+    const isCurrent = (currentStationCode && code === currentStationCode.toUpperCase()) || st.state === 'current' || st.status === 'CURRENT';
+    const isNext = (nextStationCode && code === nextStationCode.toUpperCase()) || st.state === 'next' || st.status === 'NEXT';
+
+    return {
+      sequence: st.sequence != null ? Number(st.sequence) : idx + 1,
+      code,
+      station_code: code,
+      name,
+      station_name: name,
+      lat: validStationCoord ? validStationCoord.lat : null,
+      lng: validStationCoord ? validStationCoord.lng : null,
+      latitude: validStationCoord ? validStationCoord.lat : null,
+      longitude: validStationCoord ? validStationCoord.lng : null,
+      isPassed,
+      isCurrent,
+      isNext,
+      isHalt: st.is_halt !== undefined ? Boolean(st.is_halt) : (st.isHalt !== undefined ? Boolean(st.isHalt) : true),
+      distanceKm: st.distance != null ? Number(st.distance) : (st.distance_from_source != null ? Number(st.distance_from_source) : 0),
+      delayMin: st.delay_minutes ?? st.delayMin ?? 0,
+      scheduledArr: st.scheduled_arrival || st.scheduledArr || '--',
+      scheduledDep: st.scheduled_departure || st.scheduledDep || '--',
+      actualArr: st.actual_arrival || st.actualArr || '--',
+      actualDep: st.actual_departure || st.actualDep || '--',
+    };
+  });
+
   return {
     ...t,
     id: trainNumber, // used for React Router links: /train/:id and /tracking/:id
@@ -222,19 +356,35 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
     number: trainNumber,
     name: trainName,
     train_name: trainName,
-    route: `${sourceCity.split(' ')[0]} → ${destCity.split(' ')[0]}`,
+    route: `${sourceName.split(' ')[0]} → ${destName.split(' ')[0]}`,
     source: sourceDisplay,
-    destination: destDisplay,
-    source_city: sourceCity,
+    source_station: sourceName,
+    sourceName: sourceName,
+    sourceCode: sourceCode,
     source_code: sourceCode,
-    destination_city: destCity,
+    sourceObj: sourceObj,
+    sourceDetails: sourceObj,
+    source_details: sourceObj,
+    destination: destDisplay,
+    destination_station: destName,
+    destinationName: destName,
+    destCode: destCode,
     destination_code: destCode,
+    destObj: destinationObj,
+    destinationDetails: destinationObj,
+    destination_details: destinationObj,
+    source_city: sourceName,
+    destination_city: destName,
     status: status,
     statusType: statusType,
     currentDelayMin: delayMin,
     delay_minutes: delayMin,
     currentSpeed: speed,
     speed: speed,
+    speedStatus: t.speed_status || t.speedStatus || (speed != null ? 'LIVE' : 'UNAVAILABLE'),
+    speed_status: t.speed_status || t.speedStatus || (speed != null ? 'LIVE' : 'UNAVAILABLE'),
+    speedUnit: speedUnit,
+    speed_unit: speedUnit,
     currentStation: currentStation,
     currentStationCode: currentStationCode,
     nextStation: nextStation,
@@ -245,6 +395,13 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
     stationCoords: stationCoords,
     latitude: coords ? coords.lat : null,
     longitude: coords ? coords.lng : null,
+    locationType: locationType,
+    location_type: locationType,
+    routeCoordinates: routeCoordinates,
+    route_coordinates: routeCoordinates,
+    stations: stations,
+    timeline: timeline,
+    halts: timeline,
     dataSource: dataSource,
     dataStatus: dataStatus,
     lastUpdated: t.timestamp || t.recorded_at || null,
@@ -253,8 +410,6 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
     baselineEta: t.baseline_eta || t.baselineEta || null,
     baselineDelay: t.baseline_delay !== undefined ? t.baseline_delay : (t.baselineDelay ?? null),
     isLive: Boolean(isLive),
-    timeline: timeline,
-    halts: timeline,
   };
 }
 
@@ -262,6 +417,36 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
 let liveTrains = DEMO_TRAINS.map((t) => mapBackendTrainToFrontend(t, false));
 
 export const trainApi = {
+  /**
+   * Fetch full geospatial map payload for Google Maps / Leaflet
+   */
+  async getTrainMap(trainId) {
+    const cleanId = String(trainId || '').trim();
+    if (!cleanId) return null;
+    try {
+      const { data } = await fetchFromApi(`/api/trains/${encodeURIComponent(cleanId)}/map`);
+      return data;
+    } catch (err) {
+      console.warn(`[TrainETA API] getTrainMap failed for #${cleanId}: ${err.message}`);
+      return null;
+    }
+  },
+
+  /**
+   * Fetch train route and track geometry
+   */
+  async getTrainRoute(trainId) {
+    const cleanId = String(trainId || '').trim();
+    if (!cleanId) return null;
+    try {
+      const { data } = await fetchFromApi(`/api/trains/${encodeURIComponent(cleanId)}/route`);
+      return data;
+    } catch (err) {
+      console.warn(`[TrainETA API] getTrainRoute failed for #${cleanId}: ${err.message}`);
+      return null;
+    }
+  },
+
   /**
    * Fetch route station timeline for a train
    */
@@ -362,6 +547,27 @@ export const trainApi = {
           data.baseline_eta = etaData.baseline_eta;
           data.baseline_delay = etaData.baseline_delay;
           data.scheduled_arrival = etaData.scheduled_eta;
+        }
+
+        // If track geometry or station list is missing, enrich from map telemetry
+        if (!data.route_coordinates || data.route_coordinates.length === 0 || !data.stations || data.stations.length === 0) {
+          try {
+            const mapRes = await fetchFromApi(`/api/trains/${encodeURIComponent(cleanId)}/map`);
+            if (mapRes?.data) {
+              if (mapRes.data.route_coordinates?.length > 0 && (!data.route_coordinates || data.route_coordinates.length === 0)) {
+                data.route_coordinates = mapRes.data.route_coordinates;
+              }
+              if (mapRes.data.stations?.length > 0 && (!data.stations || data.stations.length === 0)) {
+                data.stations = mapRes.data.stations;
+              }
+              if (mapRes.data.current_position && !data.latitude && !data.longitude) {
+                data.latitude = mapRes.data.current_position.latitude;
+                data.longitude = mapRes.data.current_position.longitude;
+              }
+            }
+          } catch {
+            // Ignore map fetch failure
+          }
         }
 
         const mapped = mapBackendTrainToFrontend(data, true);

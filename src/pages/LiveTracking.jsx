@@ -38,6 +38,7 @@ export function LiveTracking({ isDark = false }) {
       try {
         setLoading(true);
         setError(null);
+        setActiveTrain(null);
         let current = null;
         if (id) {
           try {
@@ -102,9 +103,16 @@ export function LiveTracking({ isDark = false }) {
             const msg = JSON.parse(event.data);
             if ((msg.type === 'position_update' || msg.type === 'initial_data') && Array.isArray(msg.trains)) {
               const mapped = msg.trains.map((t) => mapBackendTrainToFrontend(t, true));
-              setTrains(mapped);
+              setTrains((prevTrains) => {
+                if (activeTrain && !mapped.some((t) => String(t.id) === String(activeTrain.id) || String(t.number) === String(activeTrain.number))) {
+                  return [activeTrain, ...mapped];
+                }
+                return mapped;
+              });
               setActiveTrain((prev) => {
                 if (!prev) return mapped[0] || null;
+                const isRailRadar = (prev.dataSource || prev.data_source || '').toUpperCase() === 'RAILRADAR';
+                if (isRailRadar) return prev;
                 const freshTrain = mapped.find(
                   (t) => String(t.id) === String(prev.id) || String(t.number) === String(prev.id)
                 );
@@ -139,7 +147,7 @@ export function LiveTracking({ isDark = false }) {
       clearTimeout(reconnectTimer);
       ws?.close();
     };
-  }, []);
+  }, [activeTrain?.id]);
 
   // ── Telemetry Polling: Real-time API for RailRadar or simulate_step for simulation ──
   useEffect(() => {
@@ -148,7 +156,7 @@ export function LiveTracking({ isDark = false }) {
       return;
     }
 
-    const isRealLiveTrain = activeTrain.dataSource === 'RAILRADAR';
+    const isRealLiveTrain = (activeTrain?.dataSource || activeTrain?.data_source || '').toUpperCase() === 'RAILRADAR';
 
     if (isRealLiveTrain) {
       // Direct live network polling for discovered real trains
@@ -163,7 +171,7 @@ export function LiveTracking({ isDark = false }) {
         } catch (err) {
           console.error("Realtime telemetry polling failed:", err);
         }
-      }, 5000);
+      }, 10000);
       return () => {
         if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
       };
@@ -330,7 +338,13 @@ export function LiveTracking({ isDark = false }) {
               {[
                 { icon: MapPin, label: 'CURRENT', value: activeTrain.currentStation, sub: activeTrain.currentStationCode, color: 'text-blue-500' },
                 { icon: Navigation, label: 'NEXT STOP', value: activeTrain.nextStation, sub: activeTrain.nextStationCode, color: 'text-indigo-500' },
-                { icon: Gauge, label: 'SPEED', value: activeTrain.currentSpeed != null ? `${activeTrain.currentSpeed} km/h` : 'Unavailable', sub: activeTrain.currentSpeed != null ? 'Traction Nominal' : 'No Data', color: 'text-cyan-500' },
+                { 
+                  icon: Gauge, 
+                  label: 'SPEED', 
+                  value: (activeTrain.speed ?? activeTrain.currentSpeed) != null ? `${activeTrain.speed ?? activeTrain.currentSpeed} km/h` : 'Speed unavailable', 
+                  sub: (activeTrain.speed ?? activeTrain.currentSpeed) === 0 ? 'Stationary' : ((activeTrain.speed ?? activeTrain.currentSpeed) != null ? 'Live Speed' : 'Not Reported'), 
+                  color: 'text-cyan-500' 
+                },
                 { icon: Clock, label: 'DELAY', value: activeTrain.currentDelayMin < 0 ? `${Math.abs(activeTrain.currentDelayMin)} min ahead` : (isDelayed ? `+${activeTrain.currentDelayMin} min late` : 'On time'), sub: activeTrain.currentDelayMin < 0 ? 'Ahead of Schedule' : (isDelayed ? 'Variance Hold' : 'Zero Delay'), color: activeTrain.currentDelayMin < 0 ? 'text-emerald-500' : (isDelayed ? 'text-amber-500' : 'text-emerald-500') },
               ].map(({ icon: I, label, value, sub, color }) => (
                 <div key={label} className="p-3 rounded-xl bg-slate-50/80 dark:bg-slate-800/40 border border-slate-100/50 dark:border-slate-700/30">
