@@ -83,7 +83,12 @@ class RealtimePipeline:
         return ["12759", "12760", "12401", "12605", "12728", "12704", "12616"]
 
     @classmethod
-    def resolve_station(cls, db: Optional[Session], station_code_or_name: Optional[str]) -> Optional[str]:
+    def resolve_station(
+        cls,
+        db: Optional[Session],
+        station_code_or_name: Optional[str],
+        live_data: Optional[Dict[str, Any]] = None
+    ) -> Optional[str]:
         """
         Resolves station code or name against public.stations.
         Prefers station_code, falls back to station_name / city.
@@ -94,16 +99,46 @@ class RealtimePipeline:
             return None
 
         clean_val = str(station_code_or_name).strip()
+        clean_code = clean_val.upper()[:10]
+
+        # Extract authentic coordinates from live_data if available
+        st_lat = 0.0
+        st_lng = 0.0
+        st_name_live = clean_val[:100]
+
+        if live_data:
+            stations = live_data.get("stations") or live_data.get("timeline") or []
+            match_st = next(
+                (s for s in stations if (s.get("station_code") or s.get("code") or "").strip().upper() == clean_code),
+                None
+            )
+            if match_st and match_st.get("latitude") and match_st.get("longitude"):
+                st_lat = float(match_st["latitude"])
+                st_lng = float(match_st["longitude"])
+                st_name_live = match_st.get("station_name") or match_st.get("name") or st_name_live
+            elif clean_code == (live_data.get("current_station_code") or "").strip().upper() and live_data.get("station_latitude"):
+                st_lat = float(live_data["station_latitude"])
+                st_lng = float(live_data["station_longitude"])
         
         if db:
             try:
                 # 1. Try exact station_code match
                 st = db.query(Station).filter(Station.station_code.ilike(clean_val)).first()
                 if st:
+                    # Update previously zeroed coordinates if authentic coordinates are now available
+                    if (st.latitude == 0.0 or st.latitude is None) and st_lat != 0.0:
+                        st.latitude = st_lat
+                        st.longitude = st_lng
+                        db.commit()
+                        logger.info(f"[RealtimePipeline] Updated station {clean_code} coordinates to ({st_lat}, {st_lng}).")
                     return st.id
                 # 2. Try station_name match
                 st = db.query(Station).filter(Station.station_name.ilike(clean_val)).first()
                 if st:
+                    if (st.latitude == 0.0 or st.latitude is None) and st_lat != 0.0:
+                        st.latitude = st_lat
+                        st.longitude = st_lng
+                        db.commit()
                     return st.id
                 # 3. Try city match
                 st = db.query(Station).filter(Station.city.ilike(clean_val)).first()
@@ -158,12 +193,11 @@ class RealtimePipeline:
             "KZJ": ("Kazipet Junction", "Kazipet", 17.9784, 79.5218),
             "WL": ("Warangal", "Warangal", 17.9689, 79.5941),
         }
-        clean_code = clean_val.upper()[:10]
         st_meta = KNOWN_STATION_COORDS.get(clean_code)
-        st_name = st_meta[0] if st_meta else clean_val[:100]
-        st_city = st_meta[1] if st_meta else clean_val[:100]
-        st_lat = st_meta[2] if st_meta else 0.0
-        st_lng = st_meta[3] if st_meta else 0.0
+        st_name = st_meta[0] if st_meta else st_name_live
+        st_city = st_meta[1] if st_meta else st_name_live
+        final_lat = st_meta[2] if st_meta else st_lat
+        final_lng = st_meta[3] if st_meta else st_lng
 
         if db:
             try:
@@ -172,12 +206,12 @@ class RealtimePipeline:
                     station_code=clean_code,
                     station_name=st_name,
                     city=st_city,
-                    latitude=st_lat,
-                    longitude=st_lng
+                    latitude=final_lat,
+                    longitude=final_lng
                 )
                 db.add(new_st)
                 db.commit()
-                logger.info(f"[RealtimePipeline] Auto-provisioned missing station {clean_code} ({st_name}) into public.stations.")
+                logger.info(f"[RealtimePipeline] Auto-provisioned station {clean_code} ({st_name}) at ({final_lat}, {final_lng}) into public.stations.")
                 return new_st.id
             except Exception as e:
                 db.rollback()
