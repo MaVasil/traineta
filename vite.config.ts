@@ -1,6 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import fs from 'fs';
 import net from 'net';
 import { spawn } from 'child_process';
 import { defineConfig } from 'vite';
@@ -12,10 +13,17 @@ function ensureFastAPIServer() {
     if (spawned) return;
     spawned = true;
     try {
-      // Use 'python' on Windows, 'python3' on Unix
-      const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-      const child = spawn(pythonCmd, ['-m', 'uvicorn', 'backend.app.main:app', '--host', '0.0.0.0', '--port', '8001'], {
-        cwd: path.resolve(__dirname),
+      // Prefer virtual environment Python interpreter if present
+      const venvWin = path.resolve(__dirname, 'backend/venv/Scripts/python.exe');
+      const venvUnix = path.resolve(__dirname, 'backend/venv/bin/python');
+      let pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+      if (process.platform === 'win32' && fs.existsSync(venvWin)) {
+        pythonCmd = venvWin;
+      } else if (process.platform !== 'win32' && fs.existsSync(venvUnix)) {
+        pythonCmd = venvUnix;
+      }
+      const child = spawn(pythonCmd, ['-m', 'uvicorn', 'app.main:app', '--host', '0.0.0.0', '--port', '8001', '--reload'], {
+        cwd: path.resolve(__dirname, 'backend'),
         detached: true,
         stdio: 'ignore',
         shell: process.platform === 'win32',

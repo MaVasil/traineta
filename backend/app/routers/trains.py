@@ -1,3 +1,4 @@
+"""Train API router for search, discovery, and telemetry services."""
 from typing import List, Optional, Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -22,8 +23,32 @@ def search_trains(
     destination: Optional[str] = Query(None, description="Filter by destination city"),
     db: Session = Depends(get_db)
 ):
-    """Search trains using safe parameterized queries."""
-    return TrainService.search_trains(db, query=q, status=status, source=source, destination=destination)
+    """
+    Search trains:
+    - Numeric query (e.g. 17645): Performs exact train number search with dynamic discovery fallback. Never returns unrelated DB trains.
+    - Text query (e.g. Karimnagar): Performs train name / station / city search.
+    - Source/Destination: Filters by route.
+    """
+    clean_q = q.strip() if q else ""
+    if clean_q and clean_q.isdigit():
+        # Dynamic discovery & lookup strictly for the requested train number
+        from app.services.train_discovery_service import TrainDiscoveryService
+        disc = TrainDiscoveryService.discover_train(clean_q, db=db)
+        if disc.get("success") and disc.get("train"):
+            train_data = disc["train"]
+            if status and status.lower() != "all" and train_data.get("status", "").lower() != status.lower():
+                return []
+            if source and source.lower() != "all" and source.lower() not in train_data.get("source", "").lower():
+                return []
+            if destination and destination.lower() != "all" and destination.lower() not in train_data.get("destination", "").lower():
+                return []
+            return [train_data]
+
+        # If invalid / not discoverable, return empty list (NEVER unrelated database trains)
+        return []
+
+    # Non-numeric query or empty query: perform standard text/corridor search
+    return TrainService.search_trains(db, query=clean_q or None, status=status, source=source, destination=destination)
 
 @router.get("/{train_id}/route", summary="Get train route milestones and coordinates")
 def get_train_route(train_id: str, db: Session = Depends(get_db)):
@@ -125,23 +150,59 @@ def simulate_train_step(train_id: str, db: Session = Depends(get_db)):
     return details
 
 
+@router.get("/discover/{train_number}", summary="Dynamically discover and track a train by number")
+def discover_train(train_number: str, db: Session = Depends(get_db)):
+    """
+    Discovers an unconfigured train from live railway network (RailRadar),
+    registers master record in Supabase, and adds to dynamic real-time tracking pipeline.
+    """
+    from app.services.train_discovery_service import TrainDiscoveryService
+    result = TrainDiscoveryService.discover_train(train_number, db=db)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", f"Train '{train_number}' not found."))
+    return result
+
 @router.get("/{train_id}", summary="Get train by ID or number")
 def get_train(train_id: str, db: Session = Depends(get_db)):
-    """Returns train metadata and current status for a given train ID or number."""
+    """Returns train metadata and current status for a given train ID or number with live RailRadar telemetry."""
+    clean_id = str(train_id).strip()
+    if clean_id.isdigit():
+        from app.services.train_discovery_service import TrainDiscoveryService
+        disc = TrainDiscoveryService.discover_train(clean_id, db=db)
+        if disc.get("success") and disc.get("train"):
+            return disc["train"]
+        raise HTTPException(
+            status_code=404,
+            detail=disc.get("error") or f"Unable to retrieve live train data from RailRadar for train '{train_id}'"
+        )
+
     train = TrainService.find_train(db, train_id)
     if not train:
         raise HTTPException(status_code=404, detail=f"Train '{train_id}' not found")
+
+    from app.config import settings
+    if settings.TRAIN_DATA_PROVIDER == "RAILRADAR":
+        from app.services.train_discovery_service import TrainDiscoveryService
+        disc = TrainDiscoveryService.discover_train(str(train.train_number), db=db)
+        if disc.get("success") and disc.get("train"):
+            return disc["train"]
+
     all_trains = TrainService.get_all_trains(db)
     item = next((t for t in all_trains if t["train_number"] == train.train_number), None)
-    return item or {
+    if item:
+        return item
+    details = TrainService.get_train_details(db, str(train.train_number))
+    if details:
+        return details
+    return {
         "id": train.id,
         "train_id": train.train_number,
         "train_number": train.train_number,
         "train_name": train.train_name,
-        "source": train.source_station.city if train.source_station else "Hyderabad",
-        "source_code": train.source_station.station_code if train.source_station else "HYB",
-        "destination": train.destination_station.city if train.destination_station else "Chennai",
-        "destination_code": train.destination_station.station_code if train.destination_station else "MAS",
+        "source": train.source_station.city if train.source_station else "Unknown",
+        "source_code": train.source_station.station_code if train.source_station else "SRC",
+        "destination": train.destination_station.city if train.destination_station else "Unknown",
+        "destination_code": train.destination_station.station_code if train.destination_station else "DST",
         "status": train.status,
         "delay_minutes": 0,
     }

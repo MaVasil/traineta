@@ -17,13 +17,14 @@ class BaselineETAPredictor:
     def predict(
         self,
         train_number: str,
-        current_delay: int,
-        speed: int,
+        current_delay: Optional[int],
+        speed: Optional[int],
         distance_km: float,
         scheduled_arrival: Optional[str] = None
     ) -> Dict[str, Any]:
-        # Nominal travel time in minutes based on distance and speed
-        effective_speed = max(30, speed if speed > 0 else 70)
+        # Nominal travel time in minutes based on distance and speed (safe against None and <= 0)
+        speed_val = int(speed) if (speed is not None and speed > 0) else 70
+        effective_speed = max(30, speed_val)
         nominal_travel_min = max(5, int((distance_km / effective_speed) * 60))
 
         now = datetime.now()
@@ -40,18 +41,19 @@ class BaselineETAPredictor:
         else:
             scheduled_dt = now + timedelta(minutes=nominal_travel_min)
 
-        predicted_dt = scheduled_dt + timedelta(minutes=current_delay)
-        confidence = max(0.60, min(0.95, 0.85 - (current_delay * 0.005)))
+        delay_val = int(current_delay) if current_delay is not None else 0
+        predicted_dt = scheduled_dt + timedelta(minutes=delay_val)
+        confidence = max(0.60, min(0.95, 0.85 - (delay_val * 0.005)))
 
         return {
             "train_id": train_number,
             "scheduled_eta": scheduled_dt.strftime("%H:%M"),
             "predicted_eta": predicted_dt.strftime("%H:%M"),
-            "predicted_delay": int(current_delay),
+            "predicted_delay": delay_val,
             "confidence": round(float(confidence), 2),
             "prediction_type": "BASELINE",
             "model_version": self.model_version,
-            "data_mode": "DEMO / SIMULATED DATA"
+            "data_mode": "REALTIME OPERATIONAL / BASELINE"
         }
 
 class PredictionService:
@@ -63,7 +65,15 @@ class PredictionService:
         from app.services.train_service import TrainService
         train = TrainService.find_train(db, train_id)
         if not train:
-            return None
+            # Dynamic discovery fallback if train_id looks like a train number
+            clean_id = str(train_id).strip()
+            if clean_id.isdigit() and len(clean_id) in (4, 5, 6):
+                from app.services.train_discovery_service import TrainDiscoveryService
+                disc = TrainDiscoveryService.discover_train(clean_id, db=db)
+                if disc.get("success"):
+                    train = TrainService.find_train(db, clean_id)
+            if not train:
+                return None
 
         # Fetch latest position from train_positions
         pos = (
@@ -73,8 +83,8 @@ class PredictionService:
             .first()
         )
 
-        current_delay = pos.current_delay_minutes if pos else 0
-        speed = pos.speed if pos else 75
+        current_delay = int(pos.current_delay_minutes) if (pos and pos.current_delay_minutes is not None) else 0
+        speed = int(pos.speed) if (pos and pos.speed is not None and pos.speed > 0) else None
 
         # Fetch route details
         routes = (
@@ -117,10 +127,11 @@ class PredictionService:
         # ML prediction
         if ml_predictor.is_available():
             try:
+                eff_speed = float(speed) if (speed is not None and speed > 0) else 75.0
                 # Use ML model
                 predicted_minutes = ml_predictor.predict_remaining_minutes(
                     current_delay=float(current_delay),
-                    speed=float(speed if speed > 0 else 75),  # Handle 0 speed
+                    speed=eff_speed,
                     distance_km=distance_km,
                     scheduled_hour=sch_hour,
                     day_of_week=day_of_week,
@@ -138,10 +149,10 @@ class PredictionService:
                         if sch_time < now - timedelta(hours=2):
                             sch_time += timedelta(days=1)
                         sch_dt = sch_time
-                    except:
+                    except Exception:
                         sch_dt = now + timedelta(minutes=int(distance_km/70 * 60))
                 
-                base_travel_time = (distance_km / max(1, speed if speed > 0 else 75)) * 60.0
+                base_travel_time = (distance_km / max(1.0, eff_speed)) * 60.0
                 added_delay = predicted_minutes - base_travel_time
                 ml_delay = current_delay + added_delay
                 
@@ -172,17 +183,21 @@ class PredictionService:
                 
                 # Persist prediction only if we have a station
                 if prediction_station_id:
-                    db.add(ETAPrediction(
-                        train_id=train.id,
-                        station_id=prediction_station_id,
-                        scheduled_eta=sch_dt,
-                        predicted_eta=pred_dt,
-                        predicted_delay_minutes=int(ml_delay),
-                        confidence=confidence,
-                        prediction_type="ML",
-                        model_version=res["model_version"]
-                    ))
-                    db.commit()
+                    try:
+                        db.add(ETAPrediction(
+                            train_id=train.id,
+                            station_id=prediction_station_id,
+                            scheduled_eta=sch_dt,
+                            predicted_eta=pred_dt,
+                            predicted_delay_minutes=int(ml_delay),
+                            confidence=confidence,
+                            prediction_type="ML",
+                            model_version=res["model_version"]
+                        ))
+                        db.commit()
+                    except Exception as db_err:
+                        db.rollback()
+                        print(f"Failed to persist ETAPrediction: {db_err}")
                 
                 return res
             except Exception as e:

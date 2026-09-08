@@ -49,7 +49,7 @@ DATABASE_URL=postgresql://postgres.your-project-id:your-db-password@aws-0-ap-sou
 
 ### Step 5: Start the FastAPI Backend
 ```powershell
-uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 ```
 
 ---
@@ -61,7 +61,7 @@ cd backend
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 ```
 
 ---
@@ -71,7 +71,7 @@ uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 ### 1. Automated Health Check Endpoint
 Open your browser or run:
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8001/health
 ```
 **Expected Output:**
 ```json

@@ -12,6 +12,7 @@ import {
   Navigation,
   Info,
   CheckCircle2,
+  Radio,
 } from 'lucide-react';
 import { mapService } from '../services/mapService';
 import { CORRIDOR_STATIONS, CORRIDOR_WAYPOINTS } from '../data/demoTrains';
@@ -52,7 +53,7 @@ export function TrainMap({
         if (isCancelled) return;
 
         if (maps && mapContainerRef.current) {
-          const center = train?.currentCoords || { lat: 16.5186, lng: 80.6195 };
+          const center = train?.currentCoords || train?.stationCoords || { lat: 16.5186, lng: 80.6195 };
           const map = new maps.Map(mapContainerRef.current, {
             center,
             zoom: 8,
@@ -95,13 +96,13 @@ export function TrainMap({
           });
 
           // Add Train Marker
-          if (train?.currentCoords) {
+          if (train?.currentCoords || train?.stationCoords) {
             trainMarkerRef.current = new maps.Marker({
-              position: train.currentCoords,
+              position: train.currentCoords || train.stationCoords,
               map,
-              title: `${train.number} ${train.name}`,
-              icon: mapService.createTrainMarkerIcon(isDark),
-              zIndex: 999,
+              title: `Train ${train.number} (${train.currentSpeed != null ? train.currentSpeed + ' km/h' : 'Speed N/A'})`,
+              icon: mapService.createTrainMarkerIcon(train.status === 'ON TIME', false),
+              zIndex: 100,
             });
           }
 
@@ -185,9 +186,13 @@ export function TrainMap({
     !isNaN(c.lat) &&
     !isNaN(c.lng);
 
+  const hasCoords = isValidCoord(train?.currentCoords) || isValidCoord(train?.stationCoords);
+
   const trainPos = isValidCoord(train?.currentCoords)
     ? projectCoord(train.currentCoords.lat, train.currentCoords.lng)
-    : projectCoord(17.9689, 79.5941);
+    : isValidCoord(train?.stationCoords) 
+      ? projectCoord(train.stationCoords.lat, train.stationCoords.lng) 
+      : null;
 
   const polylinePoints = CORRIDOR_WAYPOINTS.map((w) => {
     const p = projectCoord(w.lat, w.lng);
@@ -196,21 +201,28 @@ export function TrainMap({
 
   return (
     <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-900 text-white shadow-md">
-      {/* Top Banner indicating Google Map vs Fallback mode */}
-      <div className="absolute top-3 left-3 z-20 flex items-center gap-2">
+      {/* Top Banner indicating Google Map vs Fallback mode & GPS status */}
+      <div className="absolute top-3 left-3 z-20 flex flex-wrap items-center gap-2 max-w-[calc(100%-80px)]">
         <div className="px-3 py-1.5 rounded-lg bg-slate-900/85 backdrop-blur-md border border-slate-700/80 text-xs font-semibold text-slate-200 shadow-md flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
           <span>
             {useFallback
-              ? 'Google Maps unavailable • Demo route visualization active'
+              ? 'Route visualizer active'
               : 'Google Maps Telemetry Active'}
           </span>
         </div>
 
+        {!hasCoords && (
+          <div className="px-3 py-1.5 rounded-lg bg-amber-950/90 backdrop-blur-md border border-amber-500/50 text-xs font-semibold text-amber-300 shadow-md flex items-center gap-2">
+            <Radio className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+            <span>GPS signal unavailable — tracked via railway station halts</span>
+          </div>
+        )}
+
         {train && (
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600/90 backdrop-blur-md text-xs font-bold text-white shadow-md font-mono">
             <Train className="w-3.5 h-3.5" />
-            <span>{train.number} • {train.currentSpeed} km/h</span>
+            <span>{train.number} • {train.currentSpeed != null ? train.currentSpeed + ' km/h' : 'Speed N/A'}</span>
           </div>
         )}
       </div>
@@ -250,8 +262,9 @@ export function TrainMap({
         <button
           type="button"
           onClick={() => {
-            if (googleMapInstanceRef.current && train?.currentCoords) {
-              googleMapInstanceRef.current.panTo(train.currentCoords);
+            const targetCoords = train?.currentCoords || train?.stationCoords;
+            if (googleMapInstanceRef.current && targetCoords) {
+              googleMapInstanceRef.current.panTo(targetCoords);
               googleMapInstanceRef.current.setZoom(8);
             } else {
               setZoomLevel(1);
@@ -395,49 +408,92 @@ export function TrainMap({
               );
             })}
 
-            {/* Live Moving Train Marker */}
-            <g
-              transform={`translate(${trainPos.x}, ${trainPos.y})`}
-              filter="url(#trainGlow)"
-              className="cursor-pointer"
-              style={{ transition: 'transform 0.7s cubic-bezier(0.4, 0, 0.2, 1)' }}
-            >
-              {/* Pulse rings */}
-              <circle r="18" fill="#2563EB" opacity="0.3" className="animate-ping" />
-              <circle r="14" fill="#2563EB" stroke="#FFFFFF" strokeWidth="2.5" />
-              {/* Train icon in SVG */}
-              <path
-                d="M-5 -6 C-5 -7.5 -4 -8 -2 -8 L2 -8 C4 -8 5 -7.5 5 -6 L5 4 C5 5.5 4 6 2 6 L-2 6 C-4 6 -5 5.5 -5 4 Z M-3.5 -4 L3.5 -4 M-3.5 -1 L3.5 -1 M-2.5 3.5 A1 1 0 1 0 -2.5 4 M2.5 3.5 A1 1 0 1 0 2.5 4"
-                fill="none"
-                stroke="#FFFFFF"
-                strokeWidth="1.2"
-                strokeLinecap="round"
-              />
-
-              {/* Train Tag Label */}
-              <rect
-                x="-40"
-                y="-32"
-                width="80"
-                height="18"
-                rx="4"
-                fill="rgba(15, 23, 42, 0.95)"
-                stroke="#334155"
-                strokeWidth="1"
-              />
-              <text
-                x="0"
-                y="-20"
-                textAnchor="middle"
-                fill="#F9FAFB"
-                fontSize="9"
-                fontWeight="700"
-                fontFamily="JetBrains Mono, monospace"
+            {/* Live Moving Train Marker (if coordinates available) */}
+            {trainPos && (
+              <g
+                transform={`translate(${trainPos.x}, ${trainPos.y})`}
+                filter="url(#trainGlow)"
+                className="cursor-pointer"
+                style={{ transition: 'transform 0.7s cubic-bezier(0.4, 0, 0.2, 1)' }}
               >
-                {train?.number || '12401'} • {train?.currentSpeed || 78}km/h
-              </text>
-            </g>
+                {/* Pulse rings */}
+                <circle r="18" fill="#2563EB" opacity="0.3" className="animate-ping" />
+                <circle r="14" fill="#2563EB" stroke="#FFFFFF" strokeWidth="2.5" />
+                {/* Train icon in SVG */}
+                <path
+                  d="M-5 -6 C-5 -7.5 -4 -8 -2 -8 L2 -8 C4 -8 5 -7.5 5 -6 L5 4 C5 5.5 4 6 2 6 L-2 6 C-4 6 -5 5.5 -5 4 Z M-3.5 -4 L3.5 -4 M-3.5 -1 L3.5 -1 M-2.5 3.5 A1 1 0 1 0 -2.5 4 M2.5 3.5 A1 1 0 1 0 2.5 4"
+                  fill="none"
+                  stroke="#FFFFFF"
+                  strokeWidth="1.2"
+                  strokeLinecap="round"
+                />
+
+                {/* Train Tag Label */}
+                <rect
+                  x="-40"
+                  y="-32"
+                  width="80"
+                  height="18"
+                  rx="4"
+                  fill="rgba(15, 23, 42, 0.95)"
+                  stroke="#334155"
+                  strokeWidth="1"
+                />
+                <text
+                  x="0"
+                  y="-20"
+                  textAnchor="middle"
+                  fill="#F9FAFB"
+                  fontSize="9"
+                  fontWeight="700"
+                  fontFamily="JetBrains Mono, monospace"
+                >
+                  {train?.number || '12401'} • {train?.currentSpeed != null ? train.currentSpeed + 'km/h' : 'Speed N/A'}
+                </text>
+              </g>
+            )}
           </svg>
+
+          {/* Station halt fallback overlay when GPS coordinates are unavailable */}
+          {!hasCoords && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none p-4">
+              <div className="pointer-events-auto max-w-sm w-full p-4 rounded-2xl bg-slate-900/90 backdrop-blur-md border border-slate-700/80 shadow-2xl space-y-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-blue-500/20 text-blue-400">
+                    <Train className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-white leading-tight">
+                      {train?.name || 'Express Train'} (#{train?.number})
+                    </h4>
+                    <p className="text-[11px] text-amber-300 font-medium">
+                      GPS signal unavailable — tracked via railway station halts
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800 text-xs">
+                  <div className="p-2 rounded-lg bg-slate-800/60 border border-slate-700/50">
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Current Halt</span>
+                    <p className="font-bold text-white truncate">{train?.currentStation || 'In Transit'}</p>
+                    <span className="text-[10px] font-mono text-slate-400">{train?.currentStationCode || 'TRN'}</span>
+                  </div>
+                  <div className="p-2 rounded-lg bg-slate-800/60 border border-slate-700/50">
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Next Station</span>
+                    <p className="font-bold text-white truncate">{train?.nextStation || 'Approaching'}</p>
+                    <span className="text-[10px] font-mono text-slate-400">{train?.nextStationCode || 'APR'}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] pt-1">
+                  <span className="text-slate-400">Delay:</span>
+                  <span className={`font-mono font-bold ${train?.currentDelayMin > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                    {train?.currentDelayMin > 0 ? `+${train.currentDelayMin} min delay` : 'On Time'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

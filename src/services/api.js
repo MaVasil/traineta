@@ -117,22 +117,22 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
   }
 
   // Station formatting
-  const sourceCity = t.source || t.source_city || 'Hyderabad';
-  const sourceCode = t.source_code || t.sourceStationCode || 'HYB';
-  const sourceDisplay = sourceCity.includes('(') ? sourceCity : `${sourceCity} (${sourceCode})`;
+  const sourceCity = t.source || t.source_city || 'Origin';
+  const sourceCode = t.source_code || t.sourceStationCode || 'SRC';
+  const sourceDisplay = sourceCity.includes('(') ? sourceCity : (sourceCode && sourceCode !== 'SRC' ? `${sourceCity} (${sourceCode})` : sourceCity);
 
-  const destCity = t.destination || t.destination_city || 'Chennai';
-  const destCode = t.destination_code || t.destinationStationCode || 'MAS';
-  const destDisplay = destCity.includes('(') ? destCity : `${destCity} (${destCode})`;
+  const destCity = t.destination || t.destination_city || 'Destination';
+  const destCode = t.destination_code || t.destinationStationCode || 'DST';
+  const destDisplay = destCity.includes('(') ? destCity : (destCode && destCode !== 'DST' ? `${destCity} (${destCode})` : destCity);
 
   // Current station & Next station
-  const currentStation = t.current_station || t.currentStation || 'Warangal';
-  const currentStationCode = t.current_station_code || t.currentStationCode || 'WL';
-  const nextStation = t.next_station || t.nextStation || 'Vijayawada';
-  const nextStationCode = t.next_station_code || t.nextStationCode || 'BZA';
+  const currentStation = t.current_station || t.currentStation || 'In Transit';
+  const currentStationCode = t.current_station_code || t.currentStationCode || 'TRN';
+  const nextStation = t.next_station || t.nextStation || 'Approaching';
+  const nextStationCode = t.next_station_code || t.nextStationCode || 'APR';
 
   // Speeds
-  const speed = Number(t.speed ?? t.current_speed ?? t.currentSpeed ?? (delayMin > 0 ? 78 : 88));
+  const speed = t.speed != null ? Number(t.speed) : (t.currentSpeed != null ? Number(t.currentSpeed) : null);
 
   // Scheduled and predicted arrival
   const scheduledArrival = t.scheduled_arrival_at_next || t.scheduledArrivalAtNext || t.scheduled_arrival || '22:36';
@@ -154,7 +154,65 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
   const numLat = rawLat != null ? Number(rawLat) : NaN;
   const numLng = rawLng != null ? Number(rawLng) : NaN;
   const hasValidCoords = !isNaN(numLat) && !isNaN(numLng);
-  const coords = hasValidCoords ? { lat: numLat, lng: numLng } : { lat: 17.9689, lng: 79.5941 };
+  const coords = hasValidCoords ? { lat: numLat, lng: numLng } : null;
+
+  const stationLat = t.station_latitude != null ? Number(t.station_latitude) : NaN;
+  const stationLng = t.station_longitude != null ? Number(t.station_longitude) : NaN;
+  const stationCoords = !isNaN(stationLat) && !isNaN(stationLng) ? { lat: stationLat, lng: stationLng } : null;
+
+  const dataSource = t.data_source || t.dataSource || 'SIMULATED';
+  const dataStatus = t.data_status || t.dataStatus || 'LIVE';
+
+  // Route Station Timeline mapping from real halts
+  const rawTimeline = Array.isArray(t.timeline) && t.timeline.length > 0 
+    ? t.timeline 
+    : (Array.isArray(t.halts) && t.halts.length > 0 ? t.halts : []);
+
+  const timeline = rawTimeline.map((item, idx) => {
+    const code = item.station_code || item.code || item.stationCode || '';
+    const name = item.station_name || item.name || item.stationName || code;
+    const isHalt = item.is_halt !== undefined ? Boolean(item.is_halt) : (item.isHalt !== undefined ? Boolean(item.isHalt) : true);
+    
+    let state = (item.state || '').toLowerCase();
+    const statusUpper = (item.status || '').toUpperCase();
+    if (!state) {
+      if (statusUpper === 'CURRENT' || (currentStationCode && code.toUpperCase() === currentStationCode.toUpperCase())) state = 'current';
+      else if (statusUpper === 'NEXT' || (nextStationCode && code.toUpperCase() === nextStationCode.toUpperCase())) state = 'next';
+      else if (statusUpper === 'COMPLETED' || statusUpper === 'DEPARTED') state = 'completed';
+      else state = 'upcoming';
+    }
+
+    const schArr = item.scheduled_arrival || item.scheduledArr || item.scheduledArrival || '--';
+    const schDep = item.scheduled_departure || item.scheduledDep || item.scheduledDeparture || '--';
+    const actArr = item.actual_arrival || item.actualArr || item.actualArrival || '--';
+    const actDep = item.actual_departure || item.actualDep || item.actualDeparture || '--';
+
+    return {
+      sequence: item.sequence != null ? Number(item.sequence) : idx + 1,
+      code,
+      station_code: code,
+      name,
+      station_name: name,
+      isHalt,
+      is_halt: isHalt,
+      status: statusUpper || state.toUpperCase(),
+      state,
+      scheduledArr: schArr,
+      scheduled_arrival: schArr !== '--' ? schArr : null,
+      scheduledDep: schDep,
+      scheduled_departure: schDep !== '--' ? schDep : null,
+      actualArr: actArr,
+      actual_arrival: actArr !== '--' ? actArr : null,
+      actualDep: actDep,
+      actual_departure: actDep !== '--' ? actDep : null,
+      platform: item.platform || null,
+      delayMin: item.delay_minutes ?? item.delayMin ?? 0,
+      delay_minutes: item.delay_minutes ?? item.delayMin ?? 0,
+      distance: item.distance != null ? Number(item.distance) : 0,
+      distance_from_source: item.distance != null ? Number(item.distance) : 0,
+      dataSource: item.data_source || dataSource,
+    };
+  });
 
   return {
     ...t,
@@ -184,13 +242,19 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
     scheduledArrivalAtNext: scheduledArrival,
     predictedArrivalAtNext: predictedArrival,
     currentCoords: coords,
-    latitude: coords.lat,
-    longitude: coords.lng,
+    stationCoords: stationCoords,
+    latitude: coords ? coords.lat : null,
+    longitude: coords ? coords.lng : null,
+    dataSource: dataSource,
+    dataStatus: dataStatus,
+    lastUpdated: t.timestamp || t.recorded_at || null,
     predictionConfidence: t.predictionConfidence ?? (t.confidence ? Math.round(t.confidence * 100) : 88),
     predictionType: t.prediction_type || t.predictionType || 'BASELINE',
     baselineEta: t.baseline_eta || t.baselineEta || null,
     baselineDelay: t.baseline_delay !== undefined ? t.baseline_delay : (t.baselineDelay ?? null),
     isLive: Boolean(isLive),
+    timeline: timeline,
+    halts: timeline,
   };
 }
 
@@ -198,6 +262,21 @@ export function mapBackendTrainToFrontend(t, isLive = false) {
 let liveTrains = DEMO_TRAINS.map((t) => mapBackendTrainToFrontend(t, false));
 
 export const trainApi = {
+  /**
+   * Fetch route station timeline for a train
+   */
+  async getTrainTimeline(trainId) {
+    const cleanId = String(trainId || '').trim();
+    if (!cleanId) return null;
+    try {
+      const { data } = await fetchFromApi(`/api/trains/${encodeURIComponent(cleanId)}/timeline`);
+      return data;
+    } catch (err) {
+      console.warn(`[TrainETA API] getTrainTimeline failed for #${cleanId}: ${err.message}`);
+      return null;
+    }
+  },
+
   /**
    * Fetch all currently monitored trains from FastAPI (/api/trains)
    * Primary source: FastAPI backend connected to Supabase PostgreSQL
@@ -229,23 +308,51 @@ export const trainApi = {
   },
 
   /**
+   * Dynamically discover and register a train by train number from live railway network (RailRadar)
+   */
+  async discoverTrain(trainNumber) {
+    const cleanNum = String(trainNumber).trim();
+    if (!cleanNum) return null;
+    try {
+      const { data } = await fetchFromApi(`/api/trains/discover/${encodeURIComponent(cleanNum)}`);
+      if (data && data.success && data.train) {
+        console.log(`[TrainETA API] Dynamic discovery successful for train #${cleanNum}`);
+        const mapped = mapBackendTrainToFrontend(data.train, true);
+        const idx = liveTrains.findIndex((t) => String(t.id) === String(cleanNum) || String(t.number) === String(cleanNum));
+        if (idx !== -1) {
+          liveTrains[idx] = mapped;
+        } else {
+          liveTrains.push(mapped);
+        }
+        return mapped;
+      }
+    } catch (err) {
+      console.warn(`[TrainETA API] discoverTrain failed for #${cleanNum}: ${err.message}`);
+    }
+    return null;
+  },
+
+  /**
    * Get single train details by ID or train number
    */
   async getTrainById(id) {
+    const cleanId = String(id || '').trim();
+    if (!cleanId) return null;
+
     try {
-      const { data, endpoint } = await fetchFromApi(`/api/trains/${encodeURIComponent(id)}`);
+      const { data, endpoint } = await fetchFromApi(`/api/trains/${encodeURIComponent(cleanId)}`);
       if (data) {
         console.log(
-          `[TrainETA API] SUCCESS: Train details received for #${id} from FastAPI (${endpoint}). Data source: SUPABASE POSTGRESQL (LIVE).`
+          `[TrainETA API] SUCCESS: Train details received for #${cleanId} from FastAPI (${endpoint}). Data source: SUPABASE POSTGRESQL (LIVE).`
         );
         
         // Fetch ML ETA prediction
         let etaData = null;
         try {
-          const etaRes = await fetchFromApi(`/api/trains/${encodeURIComponent(id)}/eta`);
+          const etaRes = await fetchFromApi(`/api/trains/${encodeURIComponent(cleanId)}/eta`);
           etaData = etaRes.data;
         } catch (etaErr) {
-          console.warn(`[TrainETA API] Could not fetch ETA for #${id}: ${etaErr.message}`);
+          console.warn(`[TrainETA API] Could not fetch ETA for #${cleanId}: ${etaErr.message}`);
         }
         
         if (etaData) {
@@ -257,25 +364,44 @@ export const trainApi = {
           data.scheduled_arrival = etaData.scheduled_eta;
         }
 
-        return mapBackendTrainToFrontend(data, true);
+        const mapped = mapBackendTrainToFrontend(data, true);
+        const idx = liveTrains.findIndex((t) => String(t.id) === cleanId || String(t.number) === cleanId);
+        if (idx !== -1) liveTrains[idx] = mapped;
+        else liveTrains.push(mapped);
+        return mapped;
       }
     } catch (err) {
-      console.warn(`[TrainETA API] getTrainById for #${id} failed (${err.message}). Using fallback.`);
+      console.warn(`[TrainETA API] getTrainById for #${cleanId} failed (${err.message}). Attempting dynamic discovery.`);
+      const discovered = await this.discoverTrain(cleanId);
+      if (discovered) return discovered;
     }
 
-    const fallback =
-      liveTrains.find((t) => String(t.id) === String(id) || String(t.number) === String(id)) ||
-      DEMO_TRAINS.find((t) => String(t.id) === String(id) || String(t.number) === String(id)) ||
-      DEMO_TRAINS[0];
-    return mapBackendTrainToFrontend(fallback, false);
+    // For numeric train numbers: NEVER return fake/demo trains when RailRadar/backend has no data
+    if (/^\d{3,7}$/.test(cleanId)) {
+      return null;
+    }
+
+    // Match strictly by exact train number or ID in local store (non-numeric only):
+    const exactLocalMatch =
+      liveTrains.find((t) => String(t.id) === cleanId || String(t.number) === cleanId) ||
+      DEMO_TRAINS.find((t) => String(t.id) === cleanId || String(t.number) === cleanId);
+
+    if (exactLocalMatch) {
+      return mapBackendTrainToFrontend(exactLocalMatch, false);
+    }
+
+    return null;
   },
 
   /**
    * Search trains by number, name, station, or status
    */
   async searchTrains(searchTerm = '', filters = {}) {
+    const cleanTerm = (searchTerm || '').trim();
+    const isNumericSearch = /^\d{3,7}$/.test(cleanTerm);
+
     const params = new URLSearchParams();
-    if (searchTerm && searchTerm.trim()) params.append('q', searchTerm.trim());
+    if (cleanTerm) params.append('q', cleanTerm);
     if (filters.status && filters.status !== 'all') params.append('status', filters.status);
     if (filters.source && filters.source !== 'all') params.append('source', filters.source);
     if (filters.destination && filters.destination !== 'all') params.append('destination', filters.destination);
@@ -285,33 +411,58 @@ export const trainApi = {
 
     try {
       const { data, endpoint } = await fetchFromApi(path);
-      if (Array.isArray(data) && data.length > 0) {
-        console.log(
-          `[TrainETA API] SUCCESS: ${data.length} trains found from FastAPI search (${endpoint}). Data source: SUPABASE POSTGRESQL (LIVE).`
-        );
-        return data.map((t) => mapBackendTrainToFrontend(t, true));
+      if (Array.isArray(data)) {
+        if (data.length > 0) {
+          console.log(
+            `[TrainETA API] SUCCESS: ${data.length} trains found from FastAPI search (${endpoint}). Data source: SUPABASE POSTGRESQL (LIVE).`
+          );
+          return data.map((t) => mapBackendTrainToFrontend(t, true));
+        }
+        // If backend explicitly returned 0 results:
+        // For numeric search, do NOT fall back to local demo/database list!
+        if (isNumericSearch) {
+          return [];
+        }
+        return [];
       }
     } catch (err) {
-      console.warn(`[TrainETA API] searchTrains failed (${err.message}). Using local filter fallback.`);
+      console.warn(`[TrainETA API] searchTrains failed (${err.message}).`);
+      
+      // If network/backend request failed and this is a numeric search, try dynamic discovery endpoint directly
+      if (isNumericSearch) {
+        try {
+          const discovered = await this.discoverTrain(cleanTerm);
+          if (discovered) {
+            return [discovered];
+          }
+        } catch (discErr) {
+          console.warn(`[TrainETA API] dynamic discovery failed for #${cleanTerm}:`, discErr);
+        }
+        return [];
+      }
     }
 
-    // Fallback: local filter
-    const term = searchTerm.trim().toLowerCase();
-    const list = liveTrains.length > 0 ? liveTrains : DEMO_TRAINS;
-    return list.filter((train) => {
-      const matchText =
-        !term ||
-        train.number.toLowerCase().includes(term) ||
-        train.name.toLowerCase().includes(term) ||
-        train.route.toLowerCase().includes(term) ||
-        (train.currentStation && train.currentStation.toLowerCase().includes(term));
+    // Only for non-numeric searches when backend was offline/unreachable:
+    if (!isNumericSearch) {
+      const term = cleanTerm.toLowerCase();
+      const list = liveTrains.length > 0 ? liveTrains : DEMO_TRAINS;
+      return list.filter((train) => {
+        const matchText =
+          !term ||
+          train.number.toLowerCase().includes(term) ||
+          train.name.toLowerCase().includes(term) ||
+          train.route.toLowerCase().includes(term) ||
+          (train.currentStation && train.currentStation.toLowerCase().includes(term));
 
-      const matchStatus = !filters.status || train.statusType === filters.status;
-      const matchSource = !filters.source || train.source.includes(filters.source);
-      const matchDest = !filters.destination || train.destination.includes(filters.destination);
+        const matchStatus = !filters.status || train.statusType === filters.status;
+        const matchSource = !filters.source || train.source.includes(filters.source);
+        const matchDest = !filters.destination || train.destination.includes(filters.destination);
 
-      return matchText && matchStatus && matchSource && matchDest;
-    }).map((t) => mapBackendTrainToFrontend(t, false));
+        return matchText && matchStatus && matchSource && matchDest;
+      }).map((t) => mapBackendTrainToFrontend(t, false));
+    }
+
+    return [];
   },
 
   /**
@@ -397,17 +548,19 @@ export const trainApi = {
   async getTrainPosition(trainId) {
     try {
       const { data } = await fetchFromApi(`/api/trains/${encodeURIComponent(trainId)}/position`);
-      if (data && data.latitude != null && data.longitude != null) {
         return {
-          latitude: Number(data.latitude),
-          longitude: Number(data.longitude),
-          speed: Number(data.speed || 0),
+          latitude: data.latitude != null ? Number(data.latitude) : null,
+          longitude: data.longitude != null ? Number(data.longitude) : null,
+          station_latitude: data.station_latitude != null ? Number(data.station_latitude) : null,
+          station_longitude: data.station_longitude != null ? Number(data.station_longitude) : null,
+          speed: data.speed != null ? Number(data.speed) : null,
           delayMinutes: Number(data.delay_minutes ?? data.delay ?? 0),
           currentStation: data.current_station,
           nextStation: data.next_station,
           timestamp: data.timestamp,
+          dataSource: data.data_source || 'SIMULATED',
+          dataStatus: data.data_status || 'LIVE',
         };
-      }
     } catch (err) {
       console.warn(`[TrainETA API] getTrainPosition failed for #${trainId}: ${err.message}`);
     }

@@ -29,8 +29,14 @@ export function TrainDetails() {
     async function load() {
       try {
         setLoading(true);
+        setError(null);
+        setTrain(null);
         const data = await trainApi.getTrainById(id);
-        setTrain(data);
+        if (!data) {
+          setError(`Train #${id} could not be found or live telemetry is unavailable.`);
+        } else {
+          setTrain(data);
+        }
       } catch (err) {
         setError(err.message || 'Failed to load train details');
       } finally {
@@ -85,10 +91,27 @@ export function TrainDetails() {
                 <ChevronRight className="w-4 h-4 text-slate-300 dark:text-slate-600" />
                 <span>{train.destination}</span>
               </p>
+              <p className="text-sm font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-2 mt-1 flex-wrap">
+                <span className="font-mono text-xs px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">Source: {train.dataSource}</span>
+                {train.lastUpdated && (
+                  <>
+                    <span className="text-slate-300 dark:text-slate-600">•</span>
+                    <span className="text-xs">Updated: {new Date(train.lastUpdated).toLocaleTimeString()}</span>
+                  </>
+                )}
+              </p>
             </div>
 
-            <div className="flex items-center gap-3">
-              <span className={`px-4 py-1.5 rounded-full text-sm font-bold uppercase tracking-wider ${
+            <div className="flex flex-col items-end gap-2">
+              <div className="flex items-center gap-3">
+                <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                  train.dataStatus === 'LIVE' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800' :
+                  train.dataStatus === 'STALE' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400 border border-amber-200 dark:border-amber-800' :
+                  'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700'
+                }`}>
+                  {train.dataStatus}
+                </span>
+                <span className={`px-4 py-1.5 rounded-full text-sm font-bold uppercase tracking-wider ${
                 !isDelayed
                   ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/40'
                   : train.currentDelayMin <= 10
@@ -106,14 +129,15 @@ export function TrainDetails() {
               </button>
             </div>
           </div>
+        </div>
 
           {/* Stats Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 pt-6 border-t border-slate-100/60 dark:border-slate-800/40">
             {[
-              { icon: MapPin, label: 'Current Station', value: train.currentStation, sub: train.currentStationCode, color: 'from-blue-500 to-indigo-600' },
+              { icon: MapPin, label: 'Current Location', value: train.currentStation, sub: train.currentStationCode, color: 'from-blue-500 to-indigo-600' },
               { icon: Navigation, label: 'Next Station', value: train.nextStation, sub: train.nextStationCode, color: 'from-violet-500 to-purple-600' },
-              { icon: Gauge, label: 'Current Speed', value: `${train.currentSpeed} km/h`, sub: 'Traction Active', color: 'from-cyan-500 to-blue-600' },
-              { icon: Clock, label: 'Current Delay', value: isDelayed ? `+${train.currentDelayMin} min` : '0 min', sub: isDelayed ? 'Delayed' : 'On Schedule', color: isDelayed ? 'from-amber-500 to-orange-600' : 'from-emerald-500 to-teal-600' },
+              { icon: Gauge, label: 'Current Speed', value: train.currentSpeed != null ? `${train.currentSpeed} km/h` : 'Unavailable', sub: train.currentSpeed != null ? 'Traction Active' : 'No Data', color: 'from-cyan-500 to-blue-600' },
+              { icon: Clock, label: 'Current Delay', value: train.currentDelayMin < 0 ? `${Math.abs(train.currentDelayMin)} min ahead` : (train.currentDelayMin > 0 ? `${train.currentDelayMin} min late` : 'On time'), sub: train.currentDelayMin < 0 ? 'Ahead of Schedule' : (train.currentDelayMin > 0 ? 'Delayed' : 'On Schedule'), color: train.currentDelayMin < 0 ? 'from-emerald-500 to-teal-600' : (train.currentDelayMin > 0 ? 'from-amber-500 to-orange-600' : 'from-emerald-500 to-teal-600') },
             ].map(({ icon: I, label, value, sub, color }) => (
               <div key={label} className="p-4 rounded-xl bg-slate-50/80 dark:bg-slate-800/30 border border-slate-100/50 dark:border-slate-700/30">
                 <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${color} flex items-center justify-center text-white shadow-md mb-2`}>
@@ -150,7 +174,10 @@ export function TrainDetails() {
       <section className="animate-fade-in-up-3">
         <StationTimeline
           timeline={train.timeline}
+          trainNumber={train.number}
           currentStationCode={train.currentStationCode}
+          nextStationCode={train.nextStationCode}
+          dataSource={train.dataSource}
         />
       </section>
     </div>

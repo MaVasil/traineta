@@ -58,6 +58,16 @@ class Settings:
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     DATA_MODE: str = os.getenv("DATA_MODE", "DEMO_SIMULATED")
+    
+    # Real Railway API configuration
+    TRAIN_DATA_PROVIDER: str = os.getenv("TRAIN_DATA_PROVIDER", "SIMULATED")
+    RAILRADAR_API_KEY: str = os.getenv("RAILRADAR_API_KEY", "")
+
+    # Phase 5 Real-Time Operational Pipeline configuration
+    RAILRADAR_POLL_INTERVAL_SECONDS: int = int(os.getenv("RAILRADAR_POLL_INTERVAL_SECONDS", "300"))
+    TRAIN_DATA_STALE_THRESHOLD_SECONDS: int = int(os.getenv("TRAIN_DATA_STALE_THRESHOLD_SECONDS", "1800"))
+    PIPELINE_ACTIVE_TRAINS: str = os.getenv("PIPELINE_ACTIVE_TRAINS", "12759,12760,12401,12605,12728,12704,12616")
+    PIPELINE_ENABLED: bool = os.getenv("PIPELINE_ENABLED", "true").lower() in ("true", "1", "yes")
 
     @property
     def CORS_ORIGINS(self) -> List[str]:

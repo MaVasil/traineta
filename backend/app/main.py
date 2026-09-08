@@ -68,19 +68,37 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"ML predictor check failed: {e}")
 
-    # Start the background simulation ticker (auto-advances all trains every 5s)
-    ticker_task = asyncio.create_task(simulation_ticker())
-    logger.info("Simulation ticker started — pushing live position updates every 5s via WebSocket")
+    background_tasks = []
+
+    # 1. Simulation Ticker (SIMULATED mode only - advances positions every 5s)
+    if settings.TRAIN_DATA_PROVIDER == "SIMULATED":
+        sim_task = asyncio.create_task(simulation_ticker())
+        background_tasks.append(sim_task)
+        logger.info("Simulation ticker started — pushing simulated position updates every 5s via WebSocket")
+    else:
+        logger.info("TRAIN_DATA_PROVIDER is %s — simulation ticker disabled.", settings.TRAIN_DATA_PROVIDER)
+
+    # 2. Real-Time Operational Pipeline Worker (Controlled polling for real/historical dataset collection)
+    if settings.PIPELINE_ENABLED:
+        pipeline_task = asyncio.create_task(realtime_pipeline_worker())
+        background_tasks.append(pipeline_task)
+        logger.info(
+            "Realtime Pipeline worker started — polling configured trains every %ss",
+            settings.RAILRADAR_POLL_INTERVAL_SECONDS
+        )
 
     yield
 
     # Shutdown
-    ticker_task.cancel()
-    try:
-        await ticker_task
-    except asyncio.CancelledError:
-        pass
-    logger.info("Stopping TrainETA Backend...")
+    logger.info("Stopping TrainETA Backend background tasks...")
+    for t in background_tasks:
+        t.cancel()
+    for t in background_tasks:
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+    logger.info("TrainETA Backend background tasks stopped.")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -187,43 +205,122 @@ def system_status():
         "data_mode": "DEMO / SIMULATED DATA"
     }
 
-# Background simulation ticker — advances all trains every 5s and broadcasts via WebSocket
+# Background simulation ticker — advances all trains every 5s and broadcasts via WebSocket (SIMULATED only)
 async def simulation_ticker():
     """
-    Server-side simulation tick loop.
-    Every 5 seconds: advance ALL tracked train positions in the DB and broadcast
-    the updated telemetry to all connected WebSocket clients.
+    Server-side simulation tick loop (SIMULATED mode only).
+    Every 5 seconds: advances simulated positions and broadcasts to connected clients.
     """
+    from app.services.simulated_provider import SimulatedProvider
+    from app.database import SessionLocal
+    from app.services.train_service import TrainService
+    from datetime import datetime
+
+    provider = SimulatedProvider()
+
     while True:
-        await asyncio.sleep(5)
-        if not ws_manager.active_connections:
-            continue
         try:
-            from app.database import SessionLocal
-            from app.services.simulation_service import SimulationService
-            from app.services.train_service import TrainService
-            db = SessionLocal()
+            await asyncio.sleep(5)
+            if not ws_manager.active_connections:
+                continue
+
+            db = None
             try:
+                db = SessionLocal()
                 trains = TrainService.get_all_trains(db)
                 updated = []
+
                 for t in trains:
                     try:
-                        result = SimulationService.advance_train_simulation(db, t["train_number"])
-                        if result:
-                            updated.append(result)
+                        res = provider.get_live_status(t["train_number"])
+                        if res:
+                            updated.append(res)
                     except Exception as te:
-                        logger.warning(f"[SimTicker] Could not advance train {t.get('train_number')}: {te}")
+                        logger.debug(f"[SimTicker] Could not advance train {t.get('train_number')}: {te}")
+
                 if updated:
                     await ws_manager.broadcast({
                         "type": "position_update",
                         "trains": updated,
-                        "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "source": "SIMULATED"
                     })
-                    logger.debug(f"[SimTicker] Broadcast position update for {len(updated)} trains")
+            except Exception as e:
+                logger.debug(f"[SimTicker] DB read exception: {e}")
             finally:
-                db.close()
+                if db:
+                    db.close()
+        except asyncio.CancelledError:
+            logger.info("Simulation ticker cancelled.")
+            break
         except Exception as e:
             logger.error(f"[SimTicker] Tick failed: {e}")
+
+# Background worker for Real-Time Operational Pipeline (Phase 5)
+async def realtime_pipeline_worker():
+    """
+    Controlled background worker for Real-Time Operational Pipeline.
+    Periodically executes RealtimePipeline cycles at configured intervals
+    and broadcasts live updates to active WebSocket connections.
+    """
+    from app.services.realtime_pipeline import RealtimePipeline
+    from datetime import datetime
+
+    logger.info(
+        "Realtime Pipeline worker active — interval: %ss, trains: %s",
+        settings.RAILRADAR_POLL_INTERVAL_SECONDS,
+        settings.PIPELINE_ACTIVE_TRAINS
+    )
+    # Brief initial pause to let server startup complete
+    await asyncio.sleep(2)
+
+    while True:
+        try:
+            summary = await asyncio.to_thread(RealtimePipeline.run_pipeline_cycle)
+            
+            # Broadcast to WebSocket clients if any are connected and we have valid results
+            if ws_manager.active_connections and summary.get("results"):
+                valid_trains = [
+                    r for r in summary["results"] if r.get("status") in ("LIVE", "STALE")
+                ]
+                if valid_trains:
+                    await ws_manager.broadcast({
+                        "type": "position_update",
+                        "trains": valid_trains,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "source": summary.get("provider", "RAILRADAR")
+                    })
+        except asyncio.CancelledError:
+            logger.info("Realtime Pipeline worker cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"[PipelineWorker] Error during cycle execution: {e}")
+
+        # Sleep for configured interval (guarantee at least 30s)
+        interval = max(30, settings.RAILRADAR_POLL_INTERVAL_SECONDS)
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            logger.info("Realtime Pipeline worker sleep interrupted for cancellation.")
+            break
+
+# ─── Phase 5: Real-Time Pipeline API Endpoints ───
+@app.post("/api/pipeline/poll", tags=["Pipeline"], summary="Trigger on-demand pipeline polling cycle")
+@app.get("/api/pipeline/poll", tags=["Pipeline"], summary="Trigger on-demand pipeline polling cycle (GET)")
+def trigger_pipeline_poll():
+    """
+    Triggers a single controlled polling cycle across configured active trains.
+    Collects, normalizes, validates, and persists snapshots to Supabase train_positions.
+    """
+    from app.services.realtime_pipeline import RealtimePipeline
+    summary = RealtimePipeline.run_pipeline_cycle()
+    return summary
+
+@app.get("/api/pipeline/status", tags=["Pipeline"], summary="Get pipeline status and metrics")
+def get_pipeline_status():
+    """Returns real-time pipeline status, configuration, and performance metrics."""
+    from app.services.realtime_pipeline import RealtimePipeline
+    return RealtimePipeline.get_status()
 
 # WebSocket endpoint for live train tracking
 @app.websocket("/ws/tracking")
