@@ -17,7 +17,7 @@ TrainETA is an intelligent railway platform for real-time train tracking, dynami
 ## Technology Stack
 
 | Technology | Purpose |
-| ---------- | ------- |
+| ---------- | -------- |
 | **React 19** | Frontend UI Framework |
 | **Vite** | Fast frontend build tool and development server |
 | **JavaScript** | Core frontend language |
